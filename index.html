@@ -65,7 +65,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .leaflet-container { font-family: var(--font); background: var(--paper); }
 .leaflet-control-attribution { font-size: 10px; background: color-mix(in srgb, var(--paper) 80%, transparent) !important; color: var(--ink-2); }
 .leaflet-control-attribution a { color: var(--ink-2); }
-@media (prefers-color-scheme: dark) { .leaflet-tile-pane { filter: brightness(0.95) contrast(1.05); } }
+@media (prefers-color-scheme: dark) { .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.9) saturate(0.6); } }
 
 /* top bar */
 .top {
@@ -345,7 +345,7 @@ input[type=range] { width: 100%; accent-color: var(--overprint); margin: -6px 0 
       </div>
       <p class="small" style="margin-top:8px">History stays on this phone. Import GPX files from Strava, Apple Health exports or other apps to count walks you did before Neuland.</p>
     </div>
-    <p class="small">Street data © OpenStreetMap contributors. Map tiles © CARTO. Elevation from Open-Meteo.</p>
+    <p class="small">Street data © OpenStreetMap contributors. Elevation from Open-Meteo.</p>
   </div>
 </div>
 
@@ -1300,10 +1300,9 @@ input[type=range] { width: 100%; accent-color: var(--overprint); margin: -6px 0 
   let tiles = null;
   function setTiles() {
     if (tiles) map.removeLayer(tiles);
-    const style = darkMQ.matches ? 'dark_all' : 'light_all';
-    tiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/' + style + '/{z}/{x}/{y}{r}.png', {
-      maxZoom: 20, subdomains: 'abcd',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(map);
   }
   setTiles();
