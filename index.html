@@ -1,0 +1,2144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Neuland</title>
+<meta name="description" content="Walking loops through streets you have not walked yet, with beep cues for each turn.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Neuland">
+<meta name="theme-color" content="#F2F4EF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101412" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: full-bleed map as the "terrain"; a left-aligned bottom sheet for planning;
+   while walking, a high-contrast instruction band on top. The route is drawn as an
+   orienteering course overprint: purple line, start triangle, control circles. */
+:root {
+  --paper: #F2F4EF;
+  --surface: #FFFFFF;
+  --ink: #17201B;
+  --ink-2: #56635C;
+  --line: #D6DDD8;
+  --overprint: #A3218C;
+  --overprint-ink: #FFFFFF;
+  --overprint-wash: rgba(163, 33, 140, 0.10);
+  --walked: #8A958F;
+  --fresh: #23784C;
+  --warn: #B86A00;
+  --band: #17201B;
+  --band-ink: #F2F4EF;
+  --shadow: 0 -8px 28px rgba(23, 32, 27, 0.14);
+  --font: "Archivo", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #101412; --surface: #181D1A; --ink: #E6ECE8; --ink-2: #9AA7A0; --line: #2B332F;
+    --overprint: #E25AD3; --overprint-ink: #1C0619; --overprint-wash: rgba(226, 90, 211, 0.14);
+    --walked: #6E7A74; --fresh: #4FC489; --warn: #F0A23A;
+    --band: #E6ECE8; --band-ink: #101412;
+    --shadow: 0 -8px 28px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper); color: var(--ink); font-family: var(--font); font-size: 16px; line-height: 1.4;
+  overflow: hidden; overscroll-behavior: none; font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased; -webkit-user-select: none; user-select: none;
+}
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; touch-action: manipulation; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--overprint); outline-offset: 2px; }
+
+#map { position: fixed; inset: 0; background: var(--paper); z-index: 0; }
+.leaflet-container { font-family: var(--font); background: var(--paper); }
+.leaflet-control-attribution { font-size: 10px; background: color-mix(in srgb, var(--paper) 80%, transparent) !important; color: var(--ink-2); }
+.leaflet-control-attribution a { color: var(--ink-2); }
+@media (prefers-color-scheme: dark) { .leaflet-tile-pane { filter: brightness(0.95) contrast(1.05); } }
+
+/* top bar */
+.top {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 20; pointer-events: none;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) max(14px, env(safe-area-inset-right, 0px)) 0 max(14px, env(safe-area-inset-left, 0px));
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+}
+.top > * { pointer-events: auto; }
+.mark {
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px 7px 9px; border-radius: 999px;
+  background: var(--surface); box-shadow: 0 2px 10px rgba(0,0,0,.12);
+}
+.mark svg { width: 22px; height: 22px; flex: none; }
+.mark b { font-weight: 800; font-stretch: 112%; font-size: 17px; letter-spacing: -0.01em; }
+.mark span { color: var(--ink-2); font-size: 13px; font-stretch: 90%; white-space: nowrap; }
+.roundbtn {
+  width: 42px; height: 42px; border-radius: 50%; background: var(--surface); box-shadow: 0 2px 10px rgba(0,0,0,.12);
+  display: grid; place-items: center; flex: none;
+}
+.roundbtn svg { width: 21px; height: 21px; }
+.toprow { display: flex; gap: 8px; }
+
+/* bottom sheet */
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  background: var(--surface); border-radius: 20px 20px 0 0; box-shadow: var(--shadow);
+  padding-top: 10px; padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 14px; max-width: 560px; margin: 0 auto;
+}
+.grab { width: 38px; height: 4px; border-radius: 2px; background: var(--line); align-self: center; margin-bottom: -4px; }
+
+.seg { display: inline-flex; padding: 3px; border-radius: 11px; background: var(--paper); align-self: flex-start; }
+.seg button { padding: 7px 16px; border-radius: 9px; font-weight: 600; color: var(--ink-2); font-size: 15px; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+
+.amount { display: flex; align-items: center; gap: 14px; }
+.amount output { flex: 1; display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.amount .num { font-size: 64px; line-height: 0.9; font-weight: 800; font-stretch: 68%; letter-spacing: -0.02em; }
+.amount .unit { font-size: 20px; font-weight: 600; color: var(--ink-2); font-stretch: 85%; }
+.step {
+  width: 48px; height: 48px; border-radius: 50%; border: 2px solid var(--line); font-size: 26px; font-weight: 500;
+  display: grid; place-items: center; line-height: 1;
+}
+.step:active { background: var(--paper); }
+input[type=range] { width: 100%; accent-color: var(--overprint); margin: -6px 0 0; height: 28px; }
+
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.stat b { font-size: 26px; font-weight: 800; font-stretch: 75%; line-height: 1.05; }
+.stat b small { font-size: 14px; font-weight: 600; margin-left: 2px; color: var(--ink-2); }
+.stat span { font-size: 13px; color: var(--ink-2); }
+.stat.fresh b { color: var(--fresh); }
+
+.actions { display: flex; gap: 10px; }
+.primary {
+  flex: 1; min-height: 54px; border-radius: 14px; background: var(--overprint); color: var(--overprint-ink);
+  font-weight: 700; font-size: 18px; padding: 0 18px; display: flex; align-items: center; justify-content: center; gap: 10px;
+}
+.primary:disabled { opacity: .6; }
+.secondary {
+  min-height: 54px; border-radius: 14px; padding: 0 18px; font-weight: 650; font-size: 16px;
+  background: var(--paper); color: var(--ink);
+}
+.hint { margin: -4px 0 0; font-size: 13.5px; color: var(--ink-2); }
+.hint a, .linkbtn { color: var(--overprint); font-weight: 600; text-decoration: none; padding: 0; }
+
+.spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* walking: instruction band */
+.band {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 25; background: var(--band); color: var(--band-ink);
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) max(18px, env(safe-area-inset-right, 0px)) 16px max(18px, env(safe-area-inset-left, 0px));
+  display: flex; align-items: center; gap: 16px; border-radius: 0 0 20px 20px;
+}
+.band .glyph { width: 64px; height: 64px; flex: none; }
+.band .glyph svg { width: 100%; height: 100%; }
+.band .txt { min-width: 0; flex: 1; }
+.band .dist { font-size: 56px; line-height: 0.92; font-weight: 800; font-stretch: 66%; letter-spacing: -0.01em; }
+.band .dist small { font-size: 22px; font-weight: 700; margin-left: 4px; }
+.band .what { font-size: 16px; font-weight: 600; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.band.off { background: var(--warn); color: #1A1204; }
+
+.walkbar { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; }
+.walkbar .stat b { font-size: 30px; }
+.prog { height: 6px; border-radius: 3px; background: var(--paper); overflow: hidden; }
+.prog i { display: block; height: 100%; width: 0; background: var(--overprint); transition: width .6s ease; }
+.statusline { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
+.statusline span { display: inline-flex; align-items: center; gap: 5px; }
+.statusline i { width: 8px; height: 8px; border-radius: 50%; background: var(--walked); display: inline-block; }
+.statusline i.ok { background: var(--fresh); }
+.statusline i.bad { background: var(--warn); }
+.walkactions { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; }
+.walkactions button { min-height: 50px; border-radius: 13px; background: var(--paper); font-weight: 650; font-size: 15px; }
+.walkactions .pocketbtn { background: var(--ink); color: var(--paper); }
+
+/* pocket mode: black, nearly no light, hold to leave */
+.pocket {
+  position: fixed; inset: 0; z-index: 60; background: #000; color: #3A3A3A; touch-action: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center;
+  padding: 24px;
+}
+.pocket .pdist { font-size: 72px; font-weight: 800; font-stretch: 66%; line-height: 1; color: #4A4A4A; }
+.pocket .pglyph { width: 90px; height: 90px; opacity: .5; }
+.pocket .phold { position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 40px); font-size: 15px; color: #444; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.ring { width: 64px; height: 64px; }
+.ring circle { fill: none; stroke-width: 4; }
+
+/* modal */
+.modal { position: fixed; inset: 0; z-index: 50; background: rgba(10, 14, 12, .45); display: flex; align-items: flex-end; justify-content: center; }
+.modal .panel {
+  background: var(--surface); width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  border-radius: 20px 20px 0 0; padding: 18px max(18px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 22px) max(18px, env(safe-area-inset-left, 0px));
+  display: flex; flex-direction: column; gap: 18px; user-select: text; -webkit-user-select: text;
+}
+.panel h2 { margin: 0; font-size: 26px; font-weight: 800; font-stretch: 80%; display: flex; justify-content: space-between; align-items: center; }
+.panel h3 { margin: 6px 0 -6px; font-size: 15px; font-weight: 700; color: var(--ink-2); }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 44px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.row:last-child { border-bottom: 0; }
+.row label { flex: 1; min-width: 0; }
+.row label small { display: block; color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+.row select, .row input[type=number] {
+  font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink); max-width: 46%;
+}
+.switch { position: relative; width: 51px; height: 31px; flex: none; }
+.switch input { opacity: 0; width: 100%; height: 100%; margin: 0; position: absolute; inset: 0; cursor: pointer; z-index: 1; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: background .2s; }
+.switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .2s; }
+.switch input:checked + span { background: var(--overprint); }
+.switch input:checked + span::after { transform: translateX(20px); }
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+.btnrow button, .btnrow label.filebtn { min-height: 44px; padding: 0 14px; border-radius: 12px; background: var(--paper); font-weight: 600; font-size: 15px; display: inline-flex; align-items: center; cursor: pointer; }
+.btnrow .danger { color: #B3261E; }
+.legend { display: grid; gap: 8px; font-size: 14px; color: var(--ink-2); }
+.legend div { display: flex; align-items: center; gap: 10px; }
+.legend svg { width: 34px; height: 14px; flex: none; }
+.small { font-size: 13px; color: var(--ink-2); margin: 0; }
+
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 70;
+  top: calc(env(safe-area-inset-top, 0px) + 64px); max-width: min(92vw, 480px);
+  background: var(--ink); color: var(--paper); padding: 12px 16px; border-radius: 14px; font-size: 15px; font-weight: 550;
+  box-shadow: 0 6px 20px rgba(0,0,0,.25);
+}
+.toast button { color: var(--overprint); font-weight: 700; margin-left: 8px; }
+@media (prefers-color-scheme: dark) { .toast button { color: #B0247F; } }
+
+/* map markers */
+.me-dot { width: 18px; height: 18px; border-radius: 50%; background: #1E6FD9; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(30,111,217,.22); }
+.course-mark { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } .prog i { transition: none; } }
+@media (min-width: 700px) { .sheet { left: 16px; right: auto; width: 420px; bottom: 16px; border-radius: 20px; } }
+</style>
+</head>
+<body>
+<div id="map" aria-label="Map"></div>
+
+<header class="top" id="top">
+  <div class="mark">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10.5" fill="none" stroke="var(--overprint)" stroke-width="1.6"/><circle cx="12" cy="12" r="7.5" fill="none" stroke="var(--overprint)" stroke-width="1.6"/><path d="M12 7.6 L16 14.6 H8 Z" fill="none" stroke="var(--overprint)" stroke-width="1.6" stroke-linejoin="round"/></svg>
+    <b>Neuland</b><span id="explored"></span>
+  </div>
+  <div class="toprow">
+    <button class="roundbtn" id="locateBtn" aria-label="Center on my location"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+    <button class="roundbtn" id="settingsBtn" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+  </div>
+</header>
+
+<!-- planning -->
+<section class="sheet" id="plan" aria-label="Plan a walk">
+  <div class="grab"></div>
+  <div class="seg" role="group" aria-label="Plan by">
+    <button id="modeTime" aria-pressed="true">Time</button>
+    <button id="modeDist" aria-pressed="false">Distance</button>
+  </div>
+  <div class="amount">
+    <output id="amountOut" for="amount"><span class="num" id="amountNum">45</span><span class="unit" id="amountUnit">min</span></output>
+    <button class="step" id="minusBtn" aria-label="Shorter">&minus;</button>
+    <button class="step" id="plusBtn" aria-label="Longer">+</button>
+  </div>
+  <input type="range" id="amount" min="10" max="180" step="5" value="45" aria-label="Walk length">
+  <div class="stats" id="summary" hidden>
+    <div class="stat"><b id="sLen">0</b><span>km</span></div>
+    <div class="stat"><b id="sTime">0</b><span>minutes</span></div>
+    <div class="stat fresh"><b id="sNew">0</b><span>new streets</span></div>
+    <div class="stat"><b id="sClimb">–</b><span>climb</span></div>
+  </div>
+  <div class="actions">
+    <button class="primary" id="findBtn">Find a new route</button>
+    <button class="primary" id="startBtn" hidden>Start walk</button>
+    <button class="secondary" id="againBtn" hidden>Another</button>
+  </div>
+  <p class="hint" id="hint">Starts and ends where you are. Long-press the map to start somewhere else.</p>
+</section>
+
+<!-- walking -->
+<div class="band" id="band" hidden role="status" aria-live="polite">
+  <div class="glyph" id="bandGlyph"></div>
+  <div class="txt">
+    <div class="dist" id="bandDist">0<small>m</small></div>
+    <div class="what" id="bandWhat"></div>
+  </div>
+</div>
+<section class="sheet" id="walk" hidden aria-label="Walking">
+  <div class="prog"><i id="progBar"></i></div>
+  <div class="walkbar">
+    <div class="stat"><b id="wLeft">0</b><span>km to go</span></div>
+    <div class="stat"><b id="wMin">0</b><span>min left</span></div>
+    <div class="stat fresh"><b id="wNew">0</b><span>new so far</span></div>
+  </div>
+  <div class="walkactions">
+    <button class="pocketbtn" id="pocketBtn">Pocket mode</button>
+    <button id="homeBtn">Back to start</button>
+    <button id="endBtn">End</button>
+  </div>
+  <div class="statusline">
+    <span><i id="gpsDot"></i><b id="gpsTxt" style="font-weight:500">Waiting for GPS</b></span>
+    <span><i id="sndDot"></i><b id="sndTxt" style="font-weight:500">Sound</b></span>
+    <span><i id="wakeDot"></i><b id="wakeTxt" style="font-weight:500">Screen</b></span>
+  </div>
+</section>
+
+<div class="pocket" id="pocket" hidden>
+  <div class="pglyph" id="pGlyph"></div>
+  <div class="pdist" id="pDist"></div>
+  <div class="phold">
+    <svg class="ring" viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" stroke="#222"/><circle id="ringArc" cx="32" cy="32" r="28" stroke="#666" stroke-dasharray="176" stroke-dashoffset="176" transform="rotate(-90 32 32)"/></svg>
+    Hold to show the map
+  </div>
+</div>
+
+<div class="modal" id="settings" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="setTitle">
+    <h2 id="setTitle">Settings <button class="linkbtn" id="closeSettings">Done</button></h2>
+
+    <h3>Sound cues</h3>
+    <div>
+      <div class="row"><label for="cueDist">Beep before a turn<small>Distance before the corner</small></label>
+        <select id="cueDist"><option value="15">15 m</option><option value="20">20 m</option><option value="30">30 m</option><option value="40">40 m</option></select></div>
+      <div class="row"><label for="stereo">Beep in the turning ear<small>Right turns in the right earbud, left turns in the left</small></label>
+        <span class="switch"><input type="checkbox" id="stereo"><span></span></span></div>
+      <div class="row"><label for="audioMode">Over your podcast<small>Lower: podcast dips during each beep</small></label>
+        <select id="audioMode"><option value="duck">Lower it</option><option value="mix">Mix on top</option></select></div>
+      <div class="row"><label for="volume">Beep volume</label>
+        <input type="range" id="volume" min="0.2" max="1" step="0.05" style="max-width:46%"></div>
+      <div class="btnrow"><button id="testRight">Test right</button><button id="testLeft">Test left</button><button id="testOff">Test off route</button></div>
+      <p class="small" style="margin-top:8px">Right turn is one beep. Left turn is two beeps. Three quick beeps mean turn around, and a falling tone means you left the route. iPhone mutes web sounds in Silent mode, so keep the ringer on.</p>
+    </div>
+
+    <h3>Routes</h3>
+    <div>
+      <div class="row"><label for="novelty">Avoid streets I have walked<small>How hard to steer onto new streets</small></label>
+        <select id="novelty"><option value="off">Off</option><option value="some">Some</option><option value="strong">Strongly</option></select></div>
+      <div class="row"><label for="quiet">Prefer quiet streets<small>Avoid main roads where possible</small></label>
+        <span class="switch"><input type="checkbox" id="quiet"><span></span></span></div>
+      <div class="row"><label for="pace">Walking pace<small id="paceNote">Used for time-based walks</small></label>
+        <select id="pace"></select></div>
+    </div>
+
+    <h3>On the map</h3>
+    <div class="legend">
+      <div><svg viewBox="0 0 34 14"><path d="M2 7h30" stroke="var(--overprint)" stroke-width="5" stroke-linecap="round"/></svg>New streets on this route</div>
+      <div><svg viewBox="0 0 34 14"><path d="M2 7h30" stroke="var(--overprint)" stroke-width="3" stroke-dasharray="2 5" stroke-linecap="round"/></svg>Streets you have walked before</div>
+      <div><svg viewBox="0 0 34 14"><path d="M2 7h30" stroke="var(--walked)" stroke-width="4" stroke-linecap="round" opacity=".6"/></svg>Your walking history</div>
+    </div>
+
+    <h3>Walking history</h3>
+    <div>
+      <p class="small" id="histStats"></p>
+      <div class="btnrow" style="margin-top:10px">
+        <label class="filebtn">Import GPX walks<input type="file" id="gpxIn" accept=".gpx,application/gpx+xml" multiple hidden></label>
+        <button id="exportBtn">Save backup</button>
+        <label class="filebtn">Restore backup<input type="file" id="backupIn" accept=".json,application/json" hidden></label>
+        <button id="gpxOut">Export route as GPX</button>
+        <button class="danger" id="resetBtn">Clear history</button>
+      </div>
+      <p class="small" style="margin-top:8px">History stays on this phone. Import GPX files from Strava, Apple Health exports or other apps to count walks you did before Neuland.</p>
+    </div>
+    <p class="small">Street data © OpenStreetMap contributors. Map tiles © CARTO. Elevation from Open-Meteo.</p>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/* Neuland route engine: OSM walking graph, novelty-seeking loop generation,
+   turn detection and live navigation. Pure JS, runs in browser and Node. */
+(function (root) {
+  'use strict';
+
+  const R_EARTH = 6371008.8;
+  const D2R = Math.PI / 180;
+
+  // ---------- geometry ----------
+  function makeProj(lat0, lon0) {
+    const kx = Math.cos(lat0 * D2R) * D2R * R_EARTH;
+    const ky = D2R * R_EARTH;
+    return {
+      lat0, lon0,
+      x: (lon) => (lon - lon0) * kx,
+      y: (lat) => (lat - lat0) * ky,
+      lon: (x) => x / kx + lon0,
+      lat: (y) => y / ky + lat0,
+    };
+  }
+  const bearingXY = (dx, dy) => Math.atan2(dx, dy) / D2R; // clockwise from north
+  function normDeg(a) { a = ((a + 180) % 360 + 360) % 360 - 180; return a === -180 ? 180 : a; }
+  function distPointSeg(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay;
+    const l2 = dx * dx + dy * dy;
+    let t = l2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const qx = ax + t * dx, qy = ay + t * dy;
+    return { d: Math.hypot(px - qx, py - qy), t };
+  }
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // ---------- way classification ----------
+  const WALKABLE = new Set(['footway', 'path', 'pedestrian', 'living_street', 'residential', 'service', 'track',
+    'steps', 'unclassified', 'tertiary', 'tertiary_link', 'secondary', 'secondary_link', 'primary', 'primary_link',
+    'cycleway', 'bridleway', 'road', 'corridor']);
+
+  // returns {f: preference factor, busy: 0..3}
+  function classify(t) {
+    const h = t.highway;
+    let f = 1.0, busy = 0;
+    switch (h) {
+      case 'footway': case 'pedestrian': case 'path': case 'living_street': case 'track': case 'bridleway':
+        f = 0.9; break;
+      case 'steps': f = 1.1; break;
+      case 'corridor': f = 1.25; break;
+      case 'residential': case 'road': f = 1.0; break;
+      case 'service': case 'unclassified': f = 1.1; break;
+      case 'cycleway': f = (t.foot === 'yes' || t.foot === 'designated') ? 1.0 : 1.35; break;
+      case 'tertiary': case 'tertiary_link': f = 1.3; busy = 1; break;
+      case 'secondary': case 'secondary_link': f = 1.6; busy = 2; break;
+      case 'primary': case 'primary_link': f = 2.0; busy = 3; break;
+    }
+    if (h === 'footway' && t.footway === 'sidewalk') f = 1.12;
+    if (t.footway === 'crossing') f = 1.0;
+    return { f, busy };
+  }
+
+  function isWalkableWay(t) {
+    if (!t || !WALKABLE.has(t.highway)) return false;
+    if (t.access === 'private' || t.access === 'no') { if (!(t.foot === 'yes' || t.foot === 'designated' || t.foot === 'permissive')) return false; }
+    if (t.foot === 'no' || t.foot === 'private') return false;
+    if (t.highway === 'service' && /^(parking_aisle|driveway|drive-through)$/.test(t.service || '')) return false;
+    if (t.area === 'yes' && t.highway !== 'pedestrian') return false;
+    return true;
+  }
+
+  // ---------- graph ----------
+  function buildGraph(osm, center) {
+    const els = osm.elements || [];
+    const nodePos = new Map();
+    for (const e of els) if (e.type === 'node') nodePos.set(e.id, e);
+    let lat0 = center && center.lat, lon0 = center && center.lon;
+    if (lat0 == null) {
+      let sl = 0, so = 0, n = 0;
+      for (const e of nodePos.values()) { sl += e.lat; so += e.lon; n++; }
+      lat0 = sl / n; lon0 = so / n;
+    }
+    const proj = makeProj(lat0, lon0);
+
+    const idx = new Map();
+    const ids = [], xs = [], ys = [], lats = [], lons = [];
+    const segA = [], segB = [], segLen = [], segF = [], segBusy = [], segWay = [];
+    const keyToSeg = new Map();
+    const wayNames = [];
+    const nodeIndex = (id) => {
+      let i = idx.get(id);
+      if (i === undefined) {
+        const p = nodePos.get(id);
+        if (!p) return -1;
+        i = ids.length; idx.set(id, i); ids.push(id);
+        lats.push(p.lat); lons.push(p.lon); xs.push(proj.x(p.lon)); ys.push(proj.y(p.lat));
+      }
+      return i;
+    };
+    for (const e of els) {
+      if (e.type !== 'way' || !e.nodes || e.nodes.length < 2) continue;
+      const t = e.tags || {};
+      if (!isWalkableWay(t)) continue;
+      const c = classify(t);
+      const wi = wayNames.length;
+      wayNames.push(t.name || t['name:de'] || '');
+      for (let k = 0; k + 1 < e.nodes.length; k++) {
+        const a = e.nodes[k], b = e.nodes[k + 1];
+        if (a === b) continue;
+        const key = a < b ? a + '_' + b : b + '_' + a;
+        if (keyToSeg.has(key)) continue;
+        const ia = nodeIndex(a), ib = nodeIndex(b);
+        if (ia < 0 || ib < 0) continue;
+        const s = segA.length;
+        keyToSeg.set(key, s);
+        segA.push(ia); segB.push(ib);
+        segLen.push(Math.hypot(xs[ia] - xs[ib], ys[ia] - ys[ib]));
+        segF.push(c.f); segBusy.push(c.busy); segWay.push(wi);
+      }
+    }
+    const N = ids.length, S = segA.length;
+    const g = {
+      proj, N, S,
+      osmId: Float64Array.from(ids), lat: Float64Array.from(lats), lon: Float64Array.from(lons),
+      x: Float64Array.from(xs), y: Float64Array.from(ys),
+      segA: Int32Array.from(segA), segB: Int32Array.from(segB),
+      segLen: Float32Array.from(segLen), segF: Float32Array.from(segF), segBusy: Uint8Array.from(segBusy),
+      segWay: Int32Array.from(segWay), wayNames, keyToSeg,
+    };
+    // CSR adjacency
+    const deg = new Int32Array(N);
+    for (let s = 0; s < S; s++) { deg[g.segA[s]]++; deg[g.segB[s]]++; }
+    const adjStart = new Int32Array(N + 1);
+    for (let i = 0; i < N; i++) adjStart[i + 1] = adjStart[i] + deg[i];
+    const fill = adjStart.slice(0, N);
+    const adjTo = new Int32Array(adjStart[N]), adjSeg = new Int32Array(adjStart[N]);
+    for (let s = 0; s < S; s++) {
+      const a = g.segA[s], b = g.segB[s];
+      adjTo[fill[a]] = b; adjSeg[fill[a]++] = s;
+      adjTo[fill[b]] = a; adjSeg[fill[b]++] = s;
+    }
+    g.adjStart = adjStart; g.adjTo = adjTo; g.adjSeg = adjSeg; g.degree = deg;
+    // spatial grid of segments
+    const CELL = 40;
+    g.cell = CELL;
+    const grid = new Map();
+    for (let s = 0; s < S; s++) {
+      const a = g.segA[s], b = g.segB[s];
+      const x0 = Math.floor(Math.min(g.x[a], g.x[b]) / CELL), x1 = Math.floor(Math.max(g.x[a], g.x[b]) / CELL);
+      const y0 = Math.floor(Math.min(g.y[a], g.y[b]) / CELL), y1 = Math.floor(Math.max(g.y[a], g.y[b]) / CELL);
+      for (let cx = x0; cx <= x1; cx++) for (let cy = y0; cy <= y1; cy++) {
+        const k = (cx + 50000) * 100000 + (cy + 50000);
+        let arr = grid.get(k); if (!arr) grid.set(k, arr = []);
+        arr.push(s);
+      }
+    }
+    g.grid = grid;
+    // scratch for search
+    g._dist = new Float64Array(N); g._tag = new Int32Array(N); g._prev = new Int32Array(N); g._tagN = 0;
+    g._closed = new Int32Array(N);
+    return g;
+  }
+
+  function segKey(g, s) {
+    const a = g.osmId[g.segA[s]], b = g.osmId[g.segB[s]];
+    return a < b ? a + '_' + b : b + '_' + a;
+  }
+
+  function nearestSeg(g, x, y, maxD, filter) {
+    const C = g.cell, r = Math.ceil(maxD / C);
+    const cx = Math.floor(x / C), cy = Math.floor(y / C);
+    let best = -1, bd = maxD, bt = 0;
+    for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) {
+      const arr = g.grid.get((cx + i + 50000) * 100000 + (cy + j + 50000));
+      if (!arr) continue;
+      for (const s of arr) {
+        if (filter && !filter(s)) continue;
+        const a = g.segA[s], b = g.segB[s];
+        const q = distPointSeg(x, y, g.x[a], g.y[a], g.x[b], g.y[b]);
+        if (q.d < bd) { bd = q.d; best = s; bt = q.t; }
+      }
+    }
+    return best < 0 ? null : { s: best, d: bd, t: bt };
+  }
+  function segsNear(g, x, y, maxD) {
+    const C = g.cell, r = Math.ceil(maxD / C);
+    const cx = Math.floor(x / C), cy = Math.floor(y / C);
+    const out = new Set();
+    for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) {
+      const arr = g.grid.get((cx + i + 50000) * 100000 + (cy + j + 50000));
+      if (!arr) continue;
+      for (const s of arr) {
+        const a = g.segA[s], b = g.segB[s];
+        if (distPointSeg(x, y, g.x[a], g.y[a], g.x[b], g.y[b]).d <= maxD) out.add(s);
+      }
+    }
+    return out;
+  }
+
+  function snapNode(g, x, y, filter) {
+    for (const md of [60, 200, 800]) {
+      const q = nearestSeg(g, x, y, md, filter);
+      if (q) return q.t < 0.5 ? g.segA[q.s] : g.segB[q.s];
+    }
+    return -1;
+  }
+
+  function component(g, src) {
+    const comp = new Uint8Array(g.N);
+    const stack = [src]; comp[src] = 1;
+    while (stack.length) {
+      const v = stack.pop();
+      for (let k = g.adjStart[v]; k < g.adjStart[v + 1]; k++) {
+        const u = g.adjTo[k];
+        if (!comp[u]) { comp[u] = 1; stack.push(u); }
+      }
+    }
+    return comp;
+  }
+
+  // ---------- A* ----------
+  // cost per seg = base[s] * (used[s] === usedTag ? reuse : 1)
+  function astar(g, src, dst, base, used, usedTag, reuse, hMult) {
+    const tag = ++g._tagN;
+    const dist = g._dist, tg = g._tag, prev = g._prev, closed = g._closed;
+    const tx = g.x[dst], ty = g.y[dst];
+    // binary heap
+    let hk = new Float64Array(1024), hv = new Int32Array(1024), hn = 0;
+    const push = (k, v) => {
+      if (hn === hk.length) { const nk = new Float64Array(hn * 2); nk.set(hk); hk = nk; const nv = new Int32Array(hn * 2); nv.set(hv); hv = nv; }
+      let i = hn++;
+      while (i > 0) { const p = (i - 1) >> 1; if (hk[p] <= k) break; hk[i] = hk[p]; hv[i] = hv[p]; i = p; }
+      hk[i] = k; hv[i] = v;
+    };
+    const pop = () => {
+      const v = hv[0]; const k = hk[--hn]; const vv = hv[hn];
+      let i = 0;
+      for (;;) {
+        let c = 2 * i + 1; if (c >= hn) break;
+        if (c + 1 < hn && hk[c + 1] < hk[c]) c++;
+        if (hk[c] >= k) break;
+        hk[i] = hk[c]; hv[i] = hv[c]; i = c;
+      }
+      hk[i] = k; hv[i] = vv;
+      return v;
+    };
+    tg[src] = tag; dist[src] = 0; prev[src] = -1;
+    push(Math.hypot(g.x[src] - tx, g.y[src] - ty) * hMult, src);
+    while (hn > 0) {
+      const v = pop();
+      if (closed[v] === tag) continue;
+      closed[v] = tag;
+      if (v === dst) break;
+      const dv = dist[v];
+      for (let k = g.adjStart[v]; k < g.adjStart[v + 1]; k++) {
+        const u = g.adjTo[k];
+        if (closed[u] === tag) continue;
+        const s = g.adjSeg[k];
+        let c = base[s];
+        if (used && used[s] === usedTag) c *= reuse;
+        const nd = dv + c;
+        if (tg[u] !== tag || nd < dist[u]) {
+          tg[u] = tag; dist[u] = nd; prev[u] = k;
+          push(nd + Math.hypot(g.x[u] - tx, g.y[u] - ty) * hMult, u);
+        }
+      }
+    }
+    if (closed[dst] !== tag) return null;
+    const nodes = [dst], segs = [];
+    let v = dst;
+    while (v !== src) {
+      const k = prev[v];
+      const s = g.adjSeg[k];
+      segs.push(s);
+      v = g.segA[s] === v ? g.segB[s] : g.segA[s];
+      nodes.push(v);
+    }
+    nodes.reverse(); segs.reverse();
+    return { nodes, segs, cost: dist[dst] };
+  }
+
+  // Dijkstra from src within maxCost; returns {dist(Float64Array copy for reached), prevK}
+  function dijkstraAll(g, src, base, maxCost) {
+    const N = g.N;
+    const dist = new Float64Array(N).fill(Infinity);
+    const prev = new Int32Array(N).fill(-1);
+    const done = new Uint8Array(N);
+    let hk = [], hv = [];
+    const push = (k, v) => {
+      let i = hk.length; hk.push(k); hv.push(v);
+      while (i > 0) { const p = (i - 1) >> 1; if (hk[p] <= k) break; hk[i] = hk[p]; hv[i] = hv[p]; i = p; }
+      hk[i] = k; hv[i] = v;
+    };
+    const pop = () => {
+      const v = hv[0]; const k = hk.pop(); const vv = hv.pop();
+      if (hk.length) {
+        let i = 0; const n = hk.length;
+        for (;;) { let c = 2 * i + 1; if (c >= n) break; if (c + 1 < n && hk[c + 1] < hk[c]) c++; if (hk[c] >= k) break; hk[i] = hk[c]; hv[i] = hv[c]; i = c; }
+        hk[i] = k; hv[i] = vv;
+      }
+      return v;
+    };
+    dist[src] = 0; push(0, src);
+    while (hk.length) {
+      const v = pop();
+      if (done[v]) continue; done[v] = 1;
+      if (dist[v] > maxCost) break;
+      for (let k = g.adjStart[v]; k < g.adjStart[v + 1]; k++) {
+        const u = g.adjTo[k]; if (done[u]) continue;
+        const nd = dist[v] + base[g.adjSeg[k]];
+        if (nd < dist[u]) { dist[u] = nd; prev[u] = k; push(nd, u); }
+      }
+    }
+    return { dist, prev };
+  }
+  function pathFromTree(g, tree, src, dst) {
+    if (!isFinite(tree.dist[dst])) return null;
+    const nodes = [dst], segs = [];
+    let v = dst;
+    while (v !== src) {
+      const k = tree.prev[v]; if (k < 0) return null;
+      const s = g.adjSeg[k]; segs.push(s);
+      v = g.segA[s] === v ? g.segB[s] : g.segA[s]; nodes.push(v);
+    }
+    nodes.reverse(); segs.reverse();
+    return { nodes, segs };
+  }
+
+  // ---------- walked state ----------
+  // walked: Uint8Array(S). twins: nearby near-parallel segments (road + its sidewalk)
+  function segBearing(g, s) {
+    const a = g.segA[s], b = g.segB[s];
+    return bearingXY(g.x[b] - g.x[a], g.y[b] - g.y[a]);
+  }
+  // twins: segments running parallel alongside s within ~15 m (a road and its sidewalks)
+  function twinsOf(g, s) {
+    if (!g._twins) g._twins = new Map();
+    let tw = g._twins.get(s);
+    if (tw) return tw;
+    tw = [];
+    const a = g.segA[s], b = g.segB[s];
+    const ax = g.x[a], ay = g.y[a], dx = g.x[b] - ax, dy = g.y[b] - ay;
+    const L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+    const mx = ax + dx / 2, my = ay + dy / 2;
+    for (const t of segsNear(g, mx, my, 16 + L / 2)) {
+      if (t === s) continue;
+      const ta = g.segA[t], tb = g.segB[t];
+      if (ta === a || ta === b || tb === a || tb === b) continue;
+      const tdx = g.x[tb] - g.x[ta], tdy = g.y[tb] - g.y[ta];
+      const tl = Math.hypot(tdx, tdy) || 1;
+      const cos = Math.abs((tdx * ux + tdy * uy) / tl);
+      if (cos < 0.9 && tl > 6) continue; // not parallel (about 25 degrees)
+      const tmx = (g.x[ta] + g.x[tb]) / 2 - ax, tmy = (g.y[ta] + g.y[tb]) / 2 - ay;
+      const along = tmx * ux + tmy * uy, perp = Math.abs(tmx * uy - tmy * ux);
+      if (perp < 2.5 || perp > 16) continue;
+      if (along < -6 || along > L + 6) continue;
+      tw.push(t);
+    }
+    g._twins.set(s, tw);
+    return tw;
+  }
+  function markWalked(g, walked, s, withTwins) {
+    walked[s] = 1;
+    const out = [s];
+    if (!withTwins) return out;
+    for (const t of twinsOf(g, s)) if (!walked[t]) { walked[t] = 1; out.push(t); }
+    return out;
+  }
+  // match a GPS track (array of {x,y}) onto the graph, return list of seg indices
+  function matchTrack(g, pts, maxD) {
+    const hit = new Set();
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const q = i > 0 ? pts[i - 1] : null;
+      const steps = q ? Math.max(1, Math.ceil(Math.hypot(p.x - q.x, p.y - q.y) / 8)) : 1;
+      if (q && steps > 40) continue; // gap / teleport
+      for (let k = 1; k <= steps; k++) {
+        const x = q ? q.x + (p.x - q.x) * k / steps : p.x;
+        const y = q ? q.y + (p.y - q.y) * k / steps : p.y;
+        const r = nearestSeg(g, x, y, maxD);
+        if (r) hit.add(r.s);
+      }
+    }
+    return [...hit];
+  }
+
+  // ---------- loop generation ----------
+  function polyPerimFactor(k) { const n = k + 1; return n * 2 * Math.sin(Math.PI / n); }
+
+  async function generateLoop(g, opts) {
+    const o = Object.assign({
+      target: 4000, walked: null, novelty: 3.0, quiet: true, homeR: 220, seed: (Math.random() * 1e9) | 0,
+      budgetMs: 2200, minCandidates: 14, onProgress: null, reuse: 6.0,
+    }, opts);
+    const start = o.start;
+    const S = g.S, T = o.target;
+    const rnd = mulberry32(o.seed);
+    const walked = o.walked || new Uint8Array(S);
+    const sx = g.x[start], sy = g.y[start];
+    const comp = component(g, start);
+
+    const home = new Uint8Array(S);
+    const base = new Float32Array(S);
+    let minMult = Infinity;
+    for (let s = 0; s < S; s++) {
+      const a = g.segA[s], b = g.segB[s];
+      const mx = (g.x[a] + g.x[b]) / 2 - sx, my = (g.y[a] + g.y[b]) / 2 - sy;
+      home[s] = mx * mx + my * my < o.homeR * o.homeR ? 1 : 0;
+      let f = o.quiet ? g.segF[s] : Math.min(1, g.segF[s]);
+      if (walked[s]) f *= home[s] ? Math.min(1.3, o.novelty) : o.novelty;
+      if (o.avoid && o.avoid[s] && !home[s]) f *= 2.2; // steer away from the route just suggested
+      base[s] = g.segLen[s] * f;
+      if (f < minMult) minMult = f;
+    }
+    const hMult = Math.min(minMult, 1) * 0.999;
+
+    // novelty magnet grid: unwalked length per 120 m cell
+    const MC = 120, mag = new Map(), cellNodes = new Map();
+    const ck = (cx, cy) => (cx + 50000) * 100000 + (cy + 50000);
+    for (let s = 0; s < S; s++) {
+      if (home[s] || walked[s]) continue;
+      const a = g.segA[s];
+      if (!comp[a]) continue;
+      const k = ck(Math.floor(g.x[a] / MC), Math.floor(g.y[a] / MC));
+      mag.set(k, (mag.get(k) || 0) + g.segLen[s]);
+    }
+    for (let v = 0; v < g.N; v++) {
+      if (!comp[v] || g.degree[v] < 2) continue;
+      const k = ck(Math.floor(g.x[v] / MC), Math.floor(g.y[v] / MC));
+      let arr = cellNodes.get(k); if (!arr) cellNodes.set(k, arr = []); arr.push(v);
+    }
+    const attract = (v) => {
+      const cx = Math.floor(g.x[v] / MC), cy = Math.floor(g.y[v] / MC);
+      let a = (mag.get(ck(cx, cy)) || 0) * 1.0;
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (i || j) a += (mag.get(ck(cx + i, cy + j)) || 0) * 0.5;
+      return a;
+    };
+    let maxAttr = 1;
+    for (const val of mag.values()) maxAttr = Math.max(maxAttr, val * 3);
+    const useMagnet = o.novelty > 1.01;
+
+    function pickNear(px, py, rad) {
+      for (let tries = 0; tries < 2; tries++, rad *= 2) {
+        const r = Math.ceil(rad / MC), cx = Math.floor(px / MC), cy = Math.floor(py / MC);
+        const pool = [];
+        for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) {
+          const arr = cellNodes.get(ck(cx + i, cy + j)); if (!arr) continue;
+          for (let n = 0; n < 4; n++) pool.push(arr[(rnd() * arr.length) | 0]);
+        }
+        if (!pool.length) continue;
+        let best = -1, bs = -Infinity;
+        for (let n = 0; n < Math.min(40, pool.length); n++) {
+          const v = pool[(rnd() * pool.length) | 0];
+          const d = Math.hypot(g.x[v] - px, g.y[v] - py);
+          if (d > rad * 1.2) continue;
+          const sc = (useMagnet ? attract(v) / maxAttr : 0) - 0.7 * d / rad;
+          if (sc > bs) { bs = sc; best = v; }
+        }
+        if (best >= 0) return best;
+      }
+      return -1;
+    }
+
+    const used = new Int32Array(S); let usedTag = 0;
+    const seen = new Int32Array(S); let seenTag = 0;
+
+    function buildRoute(wps) {
+      usedTag++;
+      const pts = [start, ...wps, start];
+      const nodes = [start], segs = [];
+      for (let i = 0; i + 1 < pts.length; i++) {
+        if (pts[i] === pts[i + 1]) continue;
+        const r = astar(g, pts[i], pts[i + 1], base, used, usedTag, o.reuse, hMult);
+        if (!r) return null;
+        for (const s of r.segs) {
+          segs.push(s); used[s] = usedTag;
+          if (!home[s]) for (const t of twinsOf(g, s)) used[t] = usedTag;
+        }
+        for (let j = 1; j < r.nodes.length; j++) nodes.push(r.nodes[j]);
+      }
+      return trimSpurs({ nodes, segs, wps });
+    }
+    // remove immediate out-and-back spurs (A-B-A) that waypoint snapping can create
+    function trimSpurs(r) {
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (let i = 1; i + 1 < r.nodes.length; i++) {
+          if (r.segs[i - 1] === r.segs[i] && i + 1 < r.nodes.length - 0) {
+            r.nodes.splice(i, 2); r.segs.splice(i - 1, 2); changed = true; break;
+          }
+        }
+      }
+      return r;
+    }
+    function evaluate(r) {
+      seenTag++;
+      let L = 0, novel = 0, wk = 0, rep = 0, busy = 0, homeL = 0;
+      // spatial grid of earlier route pieces, to catch going back along a parallel twin path
+      const SG = 14, sgrid = new Map();
+      const along = [];
+      for (let i = 0; i < r.segs.length; i++) {
+        const s = r.segs[i], l = g.segLen[s];
+        const a = g.segA[s], b = g.segB[s];
+        const mx = (g.x[a] + g.x[b]) / 2, my = (g.y[a] + g.y[b]) / 2;
+        const gx = Math.floor(mx / SG), gy = Math.floor(my / SG);
+        let near = false;
+        if (!home[s] && seen[s] !== seenTag) {
+          for (let p = -1; p <= 1 && !near; p++) for (let q = -1; q <= 1 && !near; q++) {
+            const arr = sgrid.get(ck(gx + p, gy + q)); if (!arr) continue;
+            for (const e of arr) {
+              if (L - e[2] < 45) continue;
+              if (Math.hypot(e[0] - mx, e[1] - my) < 13) { near = true; break; }
+            }
+          }
+        }
+        const key = ck(gx, gy);
+        let arr = sgrid.get(key); if (!arr) sgrid.set(key, arr = []);
+        arr.push([mx, my, L]);
+        L += l;
+        if (home[s]) { homeL += l; if (seen[s] === seenTag) rep += l * 0.3; seen[s] = seenTag; continue; }
+        if (seen[s] === seenTag || near) { rep += l; seen[s] = seenTag; continue; }
+        seen[s] = seenTag;
+        if (walked[s]) wk += l; else novel += l;
+        if (g.segBusy[s] >= 2) busy += l;
+      }
+      const denom = Math.max(1, L - homeL);
+      const lenErr = Math.abs(L - T) / T;
+      const novelR = novel / denom, repR = rep / denom, busyR = busy / denom;
+      const turns = computeTurns(g, r);
+      let uturns = 0; for (const t of turns) if (t.dir === 'uturn') uturns++;
+      const turnRate = turns.length / Math.max(0.3, L / 1000); // cues per km
+      const score = (useMagnet ? 1.0 : 0.25) * novelR - 4.0 * Math.max(0, lenErr - 0.04) - 1.6 * repR
+        - (o.quiet ? 0.35 : 0) * busyR - 0.12 * uturns - 0.004 * turnRate;
+      Object.assign(r, { length: L, novelLen: novel, walkedLen: wk, repeatLen: rep, busyLen: busy, homeLen: homeL, novelR, repR, lenErr, score, nTurns: turns.length, uturns });
+      return r;
+    }
+
+    let detour = 1.3;
+    const t0 = Date.now();
+    let best = null, count = 0, lastYield = Date.now();
+    const yieldNow = async () => {
+      if (Date.now() - lastYield > 40) { await new Promise((res) => setTimeout(res, 0)); lastYield = Date.now(); }
+    };
+    const shapes = [2, 3, 3, 4];
+    const pool = [];
+    // phase 1: diverse candidates
+    while (count < o.minCandidates || Date.now() - t0 < o.budgetMs * 0.6) {
+      if (count > 200) break;
+      const k = shapes[(rnd() * shapes.length) | 0];
+      const th = rnd() * Math.PI * 2;
+      const rr = T / (polyPerimFactor(k) * detour) * (0.9 + 0.2 * rnd());
+      const cx = sx + rr * Math.sin(th), cy = sy + rr * Math.cos(th);
+      const n = k + 1, wps = [], ideal = [];
+      const dir = rnd() < 0.5 ? 1 : -1;
+      let ok = true;
+      for (let i = 1; i <= k; i++) {
+        const ang = th + Math.PI + dir * i * 2 * Math.PI / n;
+        const px = cx + rr * Math.sin(ang), py = cy + rr * Math.cos(ang);
+        ideal.push([px, py]);
+        const v = pickNear(px, py, Math.max(120, rr * 0.3));
+        if (v < 0) { ok = false; break; }
+        wps.push(v);
+      }
+      count++;
+      if (!ok) continue;
+      const r = buildRoute(wps);
+      if (!r) continue;
+      evaluate(r);
+      r.k = k; r.rr = rr;
+      // update detour estimate from straight-line polygon through actual waypoints
+      let per = 0; const P = [start, ...wps, start];
+      for (let i = 0; i + 1 < P.length; i++) per += Math.hypot(g.x[P[i]] - g.x[P[i + 1]], g.y[P[i]] - g.y[P[i + 1]]);
+      if (per > 50) detour = detour * 0.7 + Math.min(2.2, Math.max(1.05, r.length / per)) * 0.3;
+      pool.push(r);
+      if (!best || r.score > best.score) best = r;
+      if (o.onProgress) o.onProgress({ count, best });
+      await yieldNow();
+    }
+    // phase 2: hill-climb refinement on the best few
+    pool.sort((a, b) => b.score - a.score);
+    const seeds = pool.slice(0, 3);
+    let iter = 0;
+    while (seeds.length && Date.now() - t0 < o.budgetMs && iter < 400) {
+      const cur = seeds[iter % seeds.length];
+      iter++;
+      const wps = cur.wps.slice();
+      if (cur.lenErr > 0.04 && rnd() < 0.6) {
+        // pull/push all waypoints toward the right length
+        const f = Math.pow(T / cur.length, 0.85);
+        let ok = true;
+        for (let i = 0; i < wps.length; i++) {
+          const px = sx + (g.x[wps[i]] - sx) * f, py = sy + (g.y[wps[i]] - sy) * f;
+          const v = pickNear(px, py, Math.max(60, cur.rr * 0.12));
+          if (v < 0) { ok = false; break; }
+          wps[i] = v;
+        }
+        if (!ok) continue;
+      } else {
+        const i = (rnd() * wps.length) | 0;
+        const ang = rnd() * Math.PI * 2, dd = cur.rr * 0.25 * rnd();
+        const v = pickNear(g.x[wps[i]] + dd * Math.sin(ang), g.y[wps[i]] + dd * Math.cos(ang), Math.max(80, cur.rr * 0.15));
+        if (v < 0) continue;
+        wps[i] = v;
+      }
+      const r = buildRoute(wps);
+      if (!r) continue;
+      evaluate(r); r.k = cur.k; r.rr = cur.rr;
+      if (r.score > cur.score) {
+        seeds[seeds.indexOf(cur)] = r;
+        if (r.score > best.score) best = r;
+      }
+      await yieldNow();
+    }
+    if (best) { best.candidates = count + iter; best.elapsed = Date.now() - t0; best.target = T; }
+    return best;
+  }
+
+  // shortest (preference-weighted) path between nodes, ignoring novelty
+  function plainBase(g, quiet) {
+    const base = new Float32Array(g.S);
+    for (let s = 0; s < g.S; s++) base[s] = g.segLen[s] * (quiet ? g.segF[s] : Math.min(1, g.segF[s]));
+    return base;
+  }
+  function shortestPath(g, a, b, quiet) {
+    const base = plainBase(g, quiet);
+    return astar(g, a, b, base, null, 0, 1, 0.85);
+  }
+
+  // ---------- turn detection ----------
+  function chainPoint(g, v, u, want) {
+    // walk from v through u along degree-2 nodes until `want` meters; return point
+    let prev = v, cur = u, d = Math.hypot(g.x[u] - g.x[v], g.y[u] - g.y[v]);
+    let guard = 0;
+    while (d < want && g.degree[cur] === 2 && guard++ < 50) {
+      let nxt = -1;
+      for (let k = g.adjStart[cur]; k < g.adjStart[cur + 1]; k++) if (g.adjTo[k] !== prev) { nxt = g.adjTo[k]; break; }
+      if (nxt < 0) break;
+      d += Math.hypot(g.x[nxt] - g.x[cur], g.y[nxt] - g.y[cur]);
+      prev = cur; cur = nxt;
+    }
+    return [g.x[cur], g.y[cur]];
+  }
+  // point at distance `want` along the route polyline from vertex i, direction +1/-1
+  function routePoint(P, cum, i, want, dir) {
+    const target = cum[i] + dir * want;
+    if (dir > 0) {
+      let j = i; while (j + 1 < P.length && cum[j + 1] < target) j++;
+      if (j + 1 >= P.length) return P[P.length - 1];
+      const t = (target - cum[j]) / Math.max(1e-6, cum[j + 1] - cum[j]);
+      return [P[j][0] + (P[j + 1][0] - P[j][0]) * t, P[j][1] + (P[j + 1][1] - P[j][1]) * t];
+    } else {
+      let j = i; while (j - 1 >= 0 && cum[j - 1] > target) j--;
+      if (j - 1 < 0) return P[0];
+      const t = (cum[j] - target) / Math.max(1e-6, cum[j] - cum[j - 1]);
+      return [P[j][0] + (P[j - 1][0] - P[j][0]) * t, P[j][1] + (P[j - 1][1] - P[j][1]) * t];
+    }
+  }
+
+  // after this vertex, does the route keep the same heading with only a small sideways offset?
+  function isLaneShift(P, cum, i, inB) {
+    const p30 = routePoint(P, cum, i, 30, +1), p45 = routePoint(P, cum, i, 45, +1);
+    if (cum[cum.length - 1] - cum[i] < 45) return false;
+    const h = bearingXY(p45[0] - p30[0], p45[1] - p30[1]);
+    if (Math.abs(normDeg(h - inB)) > 22) return false;
+    const ux = Math.sin(inB * D2R), uy = Math.cos(inB * D2R);
+    const dx = p45[0] - P[i][0], dy = p45[1] - P[i][1];
+    const perp = Math.abs(dx * uy - dy * ux);
+    return perp < 15;
+  }
+
+  function routeGeometry(g, route) {
+    const P = route.nodes.map((v) => [g.x[v], g.y[v]]);
+    const cum = new Float64Array(P.length);
+    for (let i = 1; i < P.length; i++) cum[i] = cum[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+    return { P, cum };
+  }
+
+  function computeTurns(g, route, geo) {
+    const { P, cum } = geo || routeGeometry(g, route);
+    const nodes = route.nodes;
+    const raw = [];
+    const LOOK = 14;
+    for (let i = 1; i + 1 < nodes.length; i++) {
+      const v = nodes[i];
+      const prevN = nodes[i - 1], nextN = nodes[i + 1];
+      if (prevN === nextN) { raw.push({ i, along: cum[i], dir: 'uturn', delta: 180 }); continue; }
+      if (g.degree[v] < 3) continue;
+      const pin = routePoint(P, cum, i, LOOK, -1);
+      const pout = routePoint(P, cum, i, LOOK, +1);
+      const inB = bearingXY(P[i][0] - pin[0], P[i][1] - pin[1]);
+      const outB = bearingXY(pout[0] - P[i][0], pout[1] - P[i][1]);
+      const delta = normDeg(outB - inB);
+      let straightest = true, minOther = 999, otherDeltas = [];
+      for (let k = g.adjStart[v]; k < g.adjStart[v + 1]; k++) {
+        const u = g.adjTo[k];
+        if (u === prevN || u === nextN) continue;
+        const q = chainPoint(g, v, u, LOOK);
+        const d = normDeg(bearingXY(q[0] - g.x[v], q[1] - g.y[v]) - inB);
+        otherDeltas.push(d);
+        if (Math.abs(d) < Math.abs(delta) - 5) straightest = false;
+        minOther = Math.min(minOther, Math.abs(d));
+      }
+      const ad = Math.abs(delta);
+      let dir = null;
+      if (ad > 150) dir = 'uturn';
+      else if (ad < 15) {
+        // carrying on nearly straight: cue only at a genuine Y-fork where a competing
+        // branch is also nearly straight on the other side
+        let comp = null;
+        for (const d of otherDeltas) if (Math.abs(d) < 30 && Math.sign(d) !== Math.sign(delta) && Math.abs(d - delta) >= 12) comp = d;
+        if (comp !== null) dir = delta < comp ? 'left' : 'right';
+      } else if (ad < 45 && straightest) {
+        dir = null; // the way bends, and it is the most natural option
+      } else if (ad < 50 && isLaneShift(P, cum, i, inB)) {
+        dir = null; // sideways hop onto a parallel sidewalk or path: same direction of travel
+      } else dir = delta > 0 ? 'right' : 'left';
+      if (dir) raw.push({ i, along: cum[i], dir, delta, inB, outB });
+    }
+    // consolidate clusters of cues within a short stretch (jogs across a street, sidewalk offsets)
+    const out = [];
+    for (let j = 0; j < raw.length; j++) {
+      const a = raw[j];
+      if (a.dir === 'uturn') { out.push(a); continue; }
+      let k = j;
+      while (k + 1 < raw.length && raw[k + 1].dir !== 'uturn' && raw[k + 1].along - raw[k].along < 16 && raw[k + 1].along - a.along < 30) k++;
+      if (k === j) { out.push(a); continue; }
+      const last = raw[k];
+      const net = normDeg(last.outB - a.inB);
+      j = k;
+      if (Math.abs(net) < 35) continue; // net effect: carry straight on
+      out.push({ i: a.i, along: a.along, dir: Math.abs(net) > 150 ? 'uturn' : net > 0 ? 'right' : 'left', delta: net });
+    }
+    for (const t of out) t.street = streetAfter(g, route, t.i);
+    return out;
+  }
+  function streetAfter(g, route, i) {
+    for (let j = i; j < Math.min(route.segs.length, i + 6); j++) {
+      const n = g.wayNames[g.segWay[route.segs[j]]];
+      if (n) return n;
+    }
+    return '';
+  }
+
+  // ---------- live navigation ----------
+  class Navigator {
+    constructor(g, route, opts) {
+      this.g = g; this.route = route;
+      this.o = Object.assign({ cueDist: 20, offTime: 4000 }, opts);
+      this.geo = routeGeometry(g, route);
+      this.total = this.geo.cum[this.geo.cum.length - 1];
+      this.turns = computeTurns(g, route, this.geo);
+      this.progress = 0; this.segIdx = 0;
+      this.nextTurn = 0; this.off = false; this.offSince = 0; this.offFixes = 0;
+      this.arrived = false; this.lastFix = null;
+    }
+    // best match of a position on the route between progress+from and progress+to
+    _match(x, y, from, to, tol, bias) {
+      const { P, cum } = this.geo;
+      let best = null;
+      for (let j = Math.max(0, this.segIdx - 8); j + 1 < P.length; j++) {
+        if (cum[j + 1] < this.progress + from) continue;
+        if (cum[j] > this.progress + to) break;
+        const q = distPointSeg(x, y, P[j][0], P[j][1], P[j + 1][0], P[j + 1][1]);
+        if (q.d > tol) continue;
+        const along = cum[j] + (cum[j + 1] - cum[j]) * q.t;
+        const ahead = along - this.progress;
+        const cost = q.d + (bias ? (ahead > 0 ? 0.12 * ahead : -0.3 * ahead) : 0);
+        if (!best || cost < best.cost) best = { j, along, d: q.d, cost };
+      }
+      return best;
+    }
+    // fix: {x, y, acc, t}
+    update(fix) {
+      const ev = [];
+      const { P, cum } = this.geo;
+      const acc = Math.max(3, fix.acc || 10);
+      if (acc > 65) return ev; // too vague to use
+      const tol = Math.max(15, Math.min(acc, 35) * 1.2 + 6);
+      // a walker covers at most ~2.5 m/s; never let one noisy fix leap further ahead than that
+      const dt = this.lastGoodT != null ? Math.max(1, (fix.t - this.lastGoodT) / 1000) : 1;
+      const win = this.lastGoodT != null ? Math.min(250, 12 + dt * 2.5) : 60;
+      let m = this._match(fix.x, fix.y, -25, win, tol, true);
+      // lost for a while: accept a far jump ahead only after 3 consistent fixes (took a shortcut)
+      if (!m && this.off) {
+        const far = this._match(fix.x, fix.y, 0, 1500, 14, false);
+        if (far) {
+          this.farHits = (this.farHits || []).filter((h) => h.along < far.along + 3 && far.along - h.along < 80);
+          this.farHits.push(far);
+          if (this.farHits.length >= 3 && far.along - this.farHits[0].along > 3) { m = far; this.farHits = []; }
+        } else this.farHits = [];
+      }
+      const prevProgress = this.progress;
+      if (m) {
+        if (m.along > this.progress) { this.progress = m.along; this.segIdx = m.j; }
+        this.lastGoodT = fix.t;
+        this.offFixes = 0;
+        if (this.off) { this.off = false; ev.push({ type: 'onroute' }); }
+        // walked segments
+        if (this.progress > prevProgress) {
+          const segs = [];
+          for (let j = 0; j + 1 < P.length; j++) {
+            if (cum[j + 1] <= prevProgress) continue;
+            if (cum[j] >= this.progress) break;
+            const covered = Math.min(cum[j + 1], this.progress) - Math.max(cum[j], prevProgress);
+            if (covered > 0.5 * (cum[j + 1] - cum[j]) || cum[j + 1] <= this.progress) segs.push(this.route.segs[j]);
+          }
+          if (segs.length) ev.push({ type: 'walked', segs });
+        }
+      } else {
+        if (this.offFixes === 0) this.offSince = fix.t;
+        this.offFixes++;
+        if (!this.off && this.offFixes >= 2 && fix.t - this.offSince >= this.o.offTime && acc < 40) {
+          this.off = true; this.farHits = []; ev.push({ type: 'offroute' });
+        }
+      }
+      // turn cues
+      while (this.nextTurn < this.turns.length && this.turns[this.nextTurn].along < this.progress - 6) {
+        const t = this.turns[this.nextTurn];
+        if (!t.cued && this.progress - t.along < 12) { t.cued = true; ev.push({ type: 'cue', dir: t.dir, turn: t, late: true }); }
+        this.nextTurn++;
+      }
+      const nt = this.turns[this.nextTurn];
+      if (nt && !nt.cued && !this.off && nt.along - this.progress <= this.o.cueDist) {
+        nt.cued = true; ev.push({ type: 'cue', dir: nt.dir, turn: nt });
+      }
+      if (!this.arrived && this.progress > this.total - 15 && this.progress > this.total * 0.8) {
+        this.arrived = true; ev.push({ type: 'arrive' });
+      }
+      this.lastFix = fix;
+      return ev;
+    }
+    get distToTurn() { const t = this.turns[this.nextTurn]; return t ? t.along - this.progress : null; }
+    get upcoming() { return this.turns[this.nextTurn] || null; }
+    get remaining() { return Math.max(0, this.total - this.progress); }
+  }
+
+  // Rejoin the route ahead from position (x,y). Returns a new route or null.
+  function rejoinRoute(g, nav, x, y, quiet) {
+    const v0 = snapNode(g, x, y);
+    if (v0 < 0) return null;
+    const base = plainBase(g, quiet);
+    const tree = dijkstraAll(g, v0, base, 2500);
+    const { cum } = nav.geo;
+    const nodes = nav.route.nodes;
+    let bestJ = -1, bc = Infinity;
+    for (let j = Math.max(0, nav.segIdx); j < nodes.length; j++) {
+      const skipped = cum[j] - nav.progress;
+      if (skipped > 1200) break;
+      const d = tree.dist[nodes[j]];
+      if (!isFinite(d)) continue;
+      let c = d + 0.2 * Math.max(0, skipped);
+      // avoid joining the route head-on (would force a U-turn at the join)
+      const pk = tree.prev[nodes[j]];
+      if (pk >= 0 && j + 1 < nodes.length) {
+        const s = g.adjSeg[pk], pv = g.segA[s] === nodes[j] ? g.segB[s] : g.segA[s];
+        const inB = bearingXY(g.x[nodes[j]] - g.x[pv], g.y[nodes[j]] - g.y[pv]);
+        const outB = bearingXY(g.x[nodes[j + 1]] - g.x[nodes[j]], g.y[nodes[j + 1]] - g.y[nodes[j]]);
+        if (pv === nodes[j + 1] || Math.abs(normDeg(outB - inB)) > 140) c += 90;
+      }
+      if (c < bc) { bc = c; bestJ = j; }
+    }
+    if (bestJ < 0) return null;
+    const p = pathFromTree(g, tree, v0, nodes[bestJ]);
+    if (!p) return null;
+    return {
+      nodes: p.nodes.concat(nodes.slice(bestJ + 1)),
+      segs: p.segs.concat(nav.route.segs.slice(bestJ)),
+    };
+  }
+
+  function routeLatLngs(g, route) { return route.nodes.map((v) => [g.lat[v], g.lon[v]]); }
+
+  const api = {
+    makeProj, buildGraph, segKey, nearestSeg, segsNear, snapNode, component, astar, dijkstraAll, pathFromTree,
+    generateLoop, shortestPath, computeTurns, routeGeometry, Navigator, rejoinRoute, markWalked, matchTrack,
+    routeLatLngs, normDeg, bearingXY, mulberry32, isWalkableWay, classify,
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.NeulandEngine = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+(() => {
+  'use strict';
+  const E = window.NeulandEngine;
+  const $ = (id) => document.getElementById(id);
+  const ST_GALLEN = [47.4239, 9.3748];
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const log = (window.__neulandLog = window.__neulandLog || []);
+
+  // ---------------- settings ----------------
+  const DEFAULTS = {
+    mode: 'time', minutes: 45, km: 4, pace: 5.0, paceSource: 'default', cueDist: 20, stereo: true,
+    volume: 0.85, audioMode: 'duck', novelty: 'strong', quiet: true,
+  };
+  const readLS = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };
+  const S = Object.assign({}, DEFAULTS, readLS('neuland.settings') || {});
+  const saveSettings = () => { try { localStorage.setItem('neuland.settings', JSON.stringify(S)); } catch (e) { /* private mode */ } };
+  const NOVELTY = { off: 1.0, some: 1.8, strong: 3.0 };
+  const paceMps = () => S.pace / 3.6;
+
+  // ---------------- storage ----------------
+  const DB = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => {
+      if (!window.indexedDB) return rej(new Error('no storage'));
+      const r = indexedDB.open('neuland', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    }));
+    return {
+      async get(k) {
+        try { const db = await open(); return await new Promise((res, rej) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
+        catch (e) { return undefined; }
+      },
+      async set(k, v) {
+        try { const db = await open(); await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+        catch (e) { console.warn('Could not save', k, e); }
+      },
+    };
+  })();
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) { /* optional */ }
+
+  // ---------------- state ----------------
+  let walkedKeys = new Set();
+  let tracks = [];
+  let graph = null, graphBox = null, walkedArr = null;
+  let here = null, fixHist = [];
+  let customStart = null;
+  let plan = null;
+  let walk = null;
+  let busyNow = false;
+
+  // ---------------- map ----------------
+  const map = L.map('map', { zoomControl: false, attributionControl: true, preferCanvas: true, tapHold: true }).setView(ST_GALLEN, 14);
+  map.attributionControl.setPrefix(false);
+  const darkMQ = matchMedia('(prefers-color-scheme: dark)');
+  let tiles = null;
+  function setTiles() {
+    if (tiles) map.removeLayer(tiles);
+    const style = darkMQ.matches ? 'dark_all' : 'light_all';
+    tiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/' + style + '/{z}/{x}/{y}{r}.png', {
+      maxZoom: 20, subdomains: 'abcd',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    }).addTo(map);
+  }
+  setTiles();
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const renderer = L.canvas({ padding: 0.5 });
+  const historyLayer = L.layerGroup().addTo(map);
+  const routeLayer = L.layerGroup().addTo(map);
+  let doneLine = null, meMarker = null, accCircle = null, pinMarker = null;
+  if (darkMQ.addEventListener) darkMQ.addEventListener('change', () => { setTiles(); renderHistory(); renderRoute(); });
+
+  // ---------------- toast ----------------
+  let toastTimer = 0;
+  function toast(msg, ms, action) {
+    const t = $('toast');
+    t.textContent = msg;
+    if (action) {
+      const b = document.createElement('button'); b.textContent = action.label;
+      b.onclick = () => { t.hidden = true; action.fn(); };
+      t.appendChild(b);
+    }
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, ms || 4500);
+  }
+
+  // ---------------- sound ----------------
+  const Sound = {
+    ctx: null, master: null, idle: 0, unlocked: false,
+    session() {
+      try { if (navigator.audioSession) navigator.audioSession.type = S.audioMode === 'duck' ? 'transient' : 'ambient'; } catch (e) { /* unsupported */ }
+    },
+    async unlock() {
+      this.session();
+      if (!this.ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return false;
+        this.ctx = new AC();
+        this.master = this.ctx.createGain();
+        this.master.connect(this.ctx.destination);
+      }
+      try { await this.ctx.resume(); } catch (e) { /* retried on play */ }
+      try {
+        const b = this.ctx.createBuffer(1, 1, 22050), s = this.ctx.createBufferSource();
+        s.buffer = b; s.connect(this.ctx.destination); s.start(0);
+      } catch (e) { /* ignore */ }
+      this.unlocked = this.ctx.state === 'running';
+      this.sleepSoon();
+      return this.unlocked;
+    },
+    tone(t, f, dur, pan, vol) {
+      const c = this.ctx;
+      const o1 = c.createOscillator(), o2 = c.createOscillator(), g = c.createGain(), g2 = c.createGain();
+      o1.type = 'sine'; o1.frequency.value = f;
+      o2.type = 'sine'; o2.frequency.value = f * 2; g2.gain.value = 0.16;
+      o1.connect(g); o2.connect(g2); g2.connect(g);
+      let out = g;
+      if (c.createStereoPanner && pan) { const p = c.createStereoPanner(); p.pan.value = pan; g.connect(p); out = p; }
+      out.connect(this.master);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.55 * vol, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o1.start(t); o2.start(t); o1.stop(t + dur + 0.05); o2.stop(t + dur + 0.05);
+    },
+    glide(t, f1, f2, dur, vol) {
+      const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+      o.connect(g); g.connect(this.master);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.5 * vol, t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.start(t); o.stop(t + dur + 0.05);
+    },
+    async play(kind) {
+      log.push({ kind, at: Date.now() });
+      if (!this.ctx) return false;
+      this.session();
+      clearTimeout(this.idle);
+      if (this.ctx.state !== 'running') { try { await this.ctx.resume(); } catch (e) { /* see status */ } }
+      const t = this.ctx.currentTime + 0.04, v = S.volume, p = S.stereo ? 0.8 : 0;
+      switch (kind) {
+        case 'right': this.tone(t, 880, 0.34, p, v); break;
+        case 'left': this.tone(t, 660, 0.2, -p, v); this.tone(t + 0.3, 660, 0.2, -p, v); break;
+        case 'uturn': for (let i = 0; i < 3; i++) this.tone(t + i * 0.17, 523, 0.12, 0, v); break;
+        case 'off': this.glide(t, 587, 349, 0.6, v); break;
+        case 'arrive': [523, 659, 784].forEach((f, i) => this.tone(t + i * 0.16, f, 0.3, 0, v)); break;
+      }
+      this.unlocked = this.ctx.state === 'running';
+      this.sleepSoon();
+      updateStatus();
+      return this.unlocked;
+    },
+    // Suspend between cues so the podcast is only lowered while a beep plays.
+    sleepSoon() {
+      clearTimeout(this.idle);
+      if (S.audioMode !== 'duck') return;
+      this.idle = setTimeout(() => { if (this.ctx && this.ctx.state === 'running') this.ctx.suspend().catch(() => {}); }, 1600);
+    },
+  };
+
+  // ---------------- screen wake ----------------
+  const wake = {
+    lock: null, want: false,
+    async acquire() {
+      this.want = true;
+      try {
+        if ('wakeLock' in navigator && !this.lock) {
+          this.lock = await navigator.wakeLock.request('screen');
+          this.lock.addEventListener('release', () => { this.lock = null; updateStatus(); });
+        }
+      } catch (e) { this.lock = null; }
+      updateStatus();
+    },
+    release() { this.want = false; try { if (this.lock) this.lock.release(); } catch (e) { /* ignore */ } this.lock = null; },
+  };
+
+  // ---------------- geolocation ----------------
+  let watchId = null, geoDenied = false;
+  const fixWaiters = [];
+  function startWatch() {
+    if (watchId !== null || !navigator.geolocation) return;
+    watchId = navigator.geolocation.watchPosition(onFix, onGeoErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+  }
+  function headingNow() {
+    if (!here) return null;
+    for (let i = fixHist.length - 1; i >= 0; i--) {
+      const f = fixHist[i];
+      const d = distM(f, here);
+      if (d >= 10 && here.t - f.t < 60000) return bearing(f, here);
+    }
+    return null;
+  }
+  function onFix(p) {
+    const c = p.coords;
+    here = { lat: c.latitude, lon: c.longitude, acc: c.accuracy || 30, t: p.timestamp || Date.now() };
+    geoDenied = false;
+    fixHist.push(here); if (fixHist.length > 40) fixHist.shift();
+    drawMe();
+    fixWaiters.splice(0).forEach((f) => f(here));
+    if (walk) onWalkFix(here);
+  }
+  function onGeoErr(e) {
+    if (e.code === 1) {
+      geoDenied = true;
+      if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+      toast('Location is off for Neuland. Allow it in Settings, or long-press the map to choose a start.', 7000);
+    }
+    fixWaiters.splice(0).forEach((f) => f(null));
+    updateStatus();
+  }
+  function nextFix(ms) {
+    return new Promise((res) => {
+      if (here && Date.now() - here.t < 20000) return res(here);
+      fixWaiters.push(res);
+      setTimeout(() => res(here), ms);
+      startWatch();
+    });
+  }
+  const distM = (a, b) => {
+    const k = Math.cos(a.lat * Math.PI / 180) * 111320;
+    return Math.hypot((b.lon - a.lon) * k, (b.lat - a.lat) * 111320);
+  };
+  const bearing = (a, b) => {
+    const k = Math.cos(a.lat * Math.PI / 180);
+    return Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI;
+  };
+  function drawMe() {
+    if (!here) return;
+    const ll = [here.lat, here.lon];
+    if (!meMarker) {
+      meMarker = L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), interactive: false, zIndexOffset: 1000 }).addTo(map);
+      accCircle = L.circle(ll, { radius: here.acc, stroke: false, fillColor: '#1E6FD9', fillOpacity: 0.08, interactive: false, renderer }).addTo(map);
+      if (!walk && !plan && !customStart) map.setView(ll, 15);
+    } else { meMarker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(here.acc); }
+  }
+
+  // ---------------- street data ----------------
+  const OVERPASS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  ];
+  function boxAround(lat, lon, r) {
+    const dLat = r / 111320, dLon = r / (111320 * Math.cos(lat * Math.PI / 180));
+    return { s: lat - dLat, n: lat + dLat, w: lon - dLon, e: lon + dLon };
+  }
+  const contains = (a, b) => a && a.s <= b.s && a.n >= b.n && a.w <= b.w && a.e >= b.e;
+  function overpassQuery(b) {
+    const bb = [b.s, b.w, b.n, b.e].map((v) => v.toFixed(5)).join(',');
+    return '[out:json][timeout:90];way["highway"~"^(footway|path|pedestrian|living_street|residential|service|track|steps|unclassified|tertiary|tertiary_link|secondary|secondary_link|primary|primary_link|cycleway|bridleway|road|corridor)$"](' + bb + ')->.w;.w out body qt;node(w.w);out skel qt;';
+  }
+  async function fetchStreets(box) {
+    let lastErr = null;
+    for (const url of OVERPASS) {
+      try {
+        const ctl = new AbortController();
+        const tm = setTimeout(() => ctl.abort(), 100000);
+        const res = await fetch(url, {
+          method: 'POST', body: 'data=' + encodeURIComponent(overpassQuery(box)),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal,
+        });
+        clearTimeout(tm);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        if (!json.elements || !json.elements.length) throw new Error('No streets returned');
+        return json;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('No street server answered');
+  }
+  async function ensureGraph(lat, lon, target, status) {
+    const need = boxAround(lat, lon, Math.min(5000, target * 0.33 + 500));
+    if (graph && contains(graphBox, need)) return graph;
+    let cache = (await DB.get('streets')) || [];
+    let hit = cache.find((c) => contains(c.box, need) && Date.now() - c.t < 30 * 864e5);
+    if (!hit) {
+      const box = boxAround(lat, lon, Math.min(5600, target * 0.33 + 1200));
+      status('Loading streets');
+      const json = await fetchStreets(box);
+      hit = { box, t: Date.now(), json };
+      cache = [hit].concat(cache.filter((c) => !contains(box, c.box))).slice(0, 3);
+      DB.set('streets', cache);
+    }
+    status('Building the map');
+    await tick();
+    graph = E.buildGraph(hit.json, { lat: (hit.box.s + hit.box.n) / 2, lon: (hit.box.w + hit.box.e) / 2 });
+    graphBox = hit.box;
+    applyHistory();
+    return graph;
+  }
+
+  // ---------------- walking history ----------------
+  function markSegs(segs) {
+    let fresh = 0;
+    for (const s of segs) {
+      if (!walkedArr[s]) fresh += graph.segLen[s];
+      for (const t of E.markWalked(graph, walkedArr, s, true)) walkedKeys.add(E.segKey(graph, t));
+    }
+    if (fresh) scheduleSave();
+    return fresh;
+  }
+  function trackToXY(tr) {
+    const out = [];
+    for (const p of tr.pts) {
+      if (p[0] < graphBox.s || p[0] > graphBox.n || p[1] < graphBox.w || p[1] > graphBox.e) continue;
+      out.push({ x: graph.proj.x(p[1]), y: graph.proj.y(p[0]) });
+    }
+    return out;
+  }
+  function applyHistory() {
+    if (!graph) return;
+    walkedArr = new Uint8Array(graph.S);
+    for (const k of walkedKeys) { const s = graph.keyToSeg.get(k); if (s !== undefined) walkedArr[s] = 1; }
+    for (const tr of tracks) {
+      const pts = trackToXY(tr);
+      if (pts.length > 1) markSegs(E.matchTrack(graph, pts, 12));
+    }
+    renderHistory();
+    updateExplored();
+  }
+  let saveTimer = 0;
+  function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 4000); }
+  function saveNow() {
+    clearTimeout(saveTimer);
+    DB.set('walked', Array.from(walkedKeys));
+    DB.set('tracks', tracks);
+  }
+  function updateExplored() {
+    const el = $('explored');
+    if (!graph || !walkedArr) { el.textContent = ''; return; }
+    const c = customStart || here || { lat: (graphBox.s + graphBox.n) / 2, lon: (graphBox.w + graphBox.e) / 2 };
+    const cx = graph.proj.x(c.lon), cy = graph.proj.y(c.lat);
+    let tot = 0, wk = 0;
+    for (let s = 0; s < graph.S; s++) {
+      const a = graph.segA[s];
+      if (Math.hypot(graph.x[a] - cx, graph.y[a] - cy) > 2000) continue;
+      tot += graph.segLen[s]; if (walkedArr[s]) wk += graph.segLen[s];
+    }
+    const pct = tot ? (wk / tot) * 100 : 0;
+    el.textContent = (pct < 1 && pct > 0 ? pct.toFixed(1) : Math.round(pct)) + '% explored';
+  }
+  function renderHistory() {
+    historyLayer.clearLayers();
+    if (!graph || !walkedArr) return;
+    const lines = [];
+    for (let s = 0; s < graph.S; s++) {
+      if (!walkedArr[s]) continue;
+      const a = graph.segA[s], b = graph.segB[s];
+      lines.push([[graph.lat[a], graph.lon[a]], [graph.lat[b], graph.lon[b]]]);
+    }
+    if (lines.length) L.polyline(lines, { renderer, color: css('--walked'), weight: 4, opacity: 0.55, interactive: false, lineCap: 'round' }).addTo(historyLayer);
+  }
+
+  // ---------------- elevation and time ----------------
+  const tobler = (s) => 6 * Math.exp(-3.5 * Math.abs(s + 0.05));
+  async function routeElevation(r) {
+    try {
+      const geo = E.routeGeometry(graph, r);
+      const total = geo.cum[geo.cum.length - 1];
+      const n = Math.max(2, Math.min(100, Math.ceil(total / 35)));
+      const d = [], lat = [], lon = [];
+      let j = 0;
+      for (let i = 0; i < n; i++) {
+        const want = (total * i) / (n - 1);
+        while (j + 1 < geo.P.length - 1 && geo.cum[j + 1] < want) j++;
+        const seg = Math.max(1e-6, geo.cum[j + 1] - geo.cum[j]), f = Math.min(1, Math.max(0, (want - geo.cum[j]) / seg));
+        const x = geo.P[j][0] + (geo.P[j + 1][0] - geo.P[j][0]) * f, y = geo.P[j][1] + (geo.P[j + 1][1] - geo.P[j][1]) * f;
+        d.push(want); lat.push(graph.proj.lat(y).toFixed(5)); lon.push(graph.proj.lon(x).toFixed(5));
+      }
+      const ctl = new AbortController(); setTimeout(() => ctl.abort(), 8000);
+      const res = await fetch('https://api.open-meteo.com/v1/elevation?latitude=' + lat.join(',') + '&longitude=' + lon.join(','), { signal: ctl.signal });
+      if (!res.ok) return null;
+      const h = (await res.json()).elevation;
+      if (!h || h.length !== n) return null;
+      const sm = h.map((v, i) => (h[Math.max(0, i - 1)] + v + h[Math.min(n - 1, i + 1)]) / 3);
+      let climb = 0;
+      for (let i = 1; i < n; i++) if (sm[i] > sm[i - 1]) climb += sm[i] - sm[i - 1];
+      return { d, h: sm, climb };
+    } catch (e) { return null; }
+  }
+  function estimateMinutes(length, elev) {
+    const v = paceMps();
+    if (!elev) return length / v / 60;
+    let sec = 0;
+    const flat = tobler(0);
+    for (let i = 1; i < elev.d.length; i++) {
+      const dd = elev.d[i] - elev.d[i - 1];
+      if (dd <= 0) continue;
+      sec += (dd / v) * (flat / tobler((elev.h[i] - elev.h[i - 1]) / dd));
+    }
+    return sec / 60;
+  }
+
+  // ---------------- planning ----------------
+  function targetMeters() { return S.mode === 'time' ? S.minutes * 60 * paceMps() : S.km * 1000; }
+  function setBusy(on, text) {
+    busyNow = on;
+    const b = $('findBtn');
+    for (const id of ['findBtn', 'againBtn', 'startBtn']) $(id).disabled = on;
+    if (on) {
+      $('summary').hidden = true; $('startBtn').hidden = true; $('againBtn').hidden = true; b.hidden = false;
+      b.innerHTML = '<span class="spinner" aria-hidden="true"></span><span id="busyText"></span>';
+      $('busyText').textContent = text || 'Working';
+    } else b.textContent = 'Find a new route';
+  }
+  const busyText = (t) => { const el = $('busyText'); if (el) el.textContent = t; };
+
+  async function findRoute(again) {
+    if (busyNow) return;
+    setBusy(true, 'Finding you');
+    try {
+      let start = customStart;
+      if (!start) {
+        if (geoDenied) throw new Error('Location is off for Neuland. Long-press the map to choose a start.');
+        start = await nextFix(15000);
+        if (!start) throw new Error('No GPS position yet. Step outside or long-press the map to choose a start.');
+      }
+      let T = targetMeters();
+      await ensureGraph(start.lat, start.lon, T * 1.15, busyText);
+      const g = graph;
+      const sNode = E.snapNode(g, g.proj.x(start.lon), g.proj.y(start.lat));
+      if (sNode < 0) throw new Error('No walkable streets near the start.');
+      let avoid = null;
+      if (again && plan) { avoid = new Uint8Array(g.S); for (const s of plan.route.segs) avoid[s] = 1; }
+      const opts = { start: sNode, walked: walkedArr, novelty: NOVELTY[S.novelty], quiet: S.quiet, avoid, budgetMs: 2200, seed: (Math.random() * 1e9) | 0, onProgress: (p) => busyText('Tried ' + p.count + ' routes') };
+      busyText('Trying routes');
+      let r = await E.generateLoop(g, Object.assign({}, opts, { target: T }));
+      if (!r) throw new Error('No loop of that length fits here. Try another length or start point.');
+      busyText('Checking the hills');
+      let elev = await routeElevation(r);
+      let mins = estimateMinutes(r.length, elev);
+      if (S.mode === 'time' && elev && Math.abs(mins - S.minutes) / S.minutes > 0.1) {
+        busyText('Adjusting for the hills');
+        const r2 = await E.generateLoop(g, Object.assign({}, opts, { target: T * S.minutes / mins, seed: opts.seed + 1 }));
+        if (r2) {
+          const e2 = await routeElevation(r2), m2 = estimateMinutes(r2.length, e2);
+          if (Math.abs(m2 - S.minutes) < Math.abs(mins - S.minutes)) { r = r2; elev = e2; mins = m2; }
+        }
+      }
+      plan = { route: r, startNode: sNode, start: { lat: g.lat[sNode], lon: g.lon[sNode] }, elev, minutes: mins, mask: noveltyMask(r) };
+      setBusy(false);
+      showPlan();
+    } catch (e) {
+      setBusy(false);
+      toast(e && e.message && !/HTTP|fetch|Failed|abort|JSON/i.test(e.message) ? e.message : 'Could not load streets. Check your connection and try again.', 6000);
+      showPlanControls();
+    }
+  }
+  function noveltyMask(r) {
+    const m = new Uint8Array(r.segs.length), seen = new Set();
+    for (let i = 0; i < r.segs.length; i++) { const s = r.segs[i]; m[i] = !walkedArr[s] && !seen.has(s) ? 1 : 0; seen.add(s); }
+    return m;
+  }
+  function showPlan() {
+    const r = plan.route;
+    $('sLen').textContent = (r.length / 1000).toFixed(1);
+    $('sTime').textContent = Math.round(plan.minutes);
+    const denom = Math.max(1, r.length - (r.homeLen || 0));
+    $('sNew').innerHTML = Math.round(Math.min(1, r.novelLen / denom) * 100) + '<small>%</small>';
+    $('sClimb').innerHTML = plan.elev ? Math.round(plan.elev.climb) + '<small>m</small>' : '–';
+    $('summary').hidden = false;
+    $('findBtn').hidden = true; $('startBtn').hidden = false; $('againBtn').hidden = false;
+    renderRoute();
+    const b = L.latLngBounds(E.routeLatLngs(graph, r));
+    const sheetH = $('plan').offsetHeight;
+    map.fitBounds(b, { paddingTopLeft: [24, 80], paddingBottomRight: [24, sheetH + 20] });
+  }
+  function showPlanControls() {
+    $('summary').hidden = !plan; $('findBtn').hidden = !!plan; $('startBtn').hidden = !plan; $('againBtn').hidden = !plan;
+  }
+  function clearPlan() { plan = null; routeLayer.clearLayers(); doneLine = null; showPlanControls(); }
+
+  // course-style drawing: overprint line, start triangle in a finish double circle, control circles
+  function courseIcon(svg, size) { return L.divIcon({ className: 'course-mark', html: svg, iconSize: [size, size], iconAnchor: [size / 2, size / 2] }); }
+  function renderRoute() {
+    routeLayer.clearLayers(); doneLine = null;
+    const r = walk ? walk.route : plan && plan.route;
+    if (!r || !graph) return;
+    const g = graph, op = css('--overprint'), mask = walk ? walk.mask : plan.mask;
+    let run = [], runNew = null;
+    const flush = () => {
+      if (run.length > 1) L.polyline(run, runNew ? { renderer, color: op, weight: 6, opacity: 0.92, lineCap: 'round', lineJoin: 'round', interactive: false }
+        : { renderer, color: op, weight: 4, opacity: 0.85, dashArray: '2 9', lineCap: 'round', interactive: false }).addTo(routeLayer);
+    };
+    for (let i = 0; i < r.segs.length; i++) {
+      const isNew = !!mask[i];
+      const a = [g.lat[r.nodes[i]], g.lon[r.nodes[i]]], b = [g.lat[r.nodes[i + 1]], g.lon[r.nodes[i + 1]]];
+      if (runNew === null) { runNew = isNew; run = [a]; }
+      if (isNew !== runNew) { flush(); run = [a]; runNew = isNew; }
+      run.push(b);
+    }
+    flush();
+    if (walk) doneLine = L.polyline([], { renderer, color: css('--walked'), weight: 7, opacity: 0.9, lineCap: 'round', interactive: false }).addTo(routeLayer);
+    // control circles at the loop's turning points
+    const wps = (plan && plan.route === r && r.wps) || [];
+    wps.forEach((v, i) => {
+      const svg = '<svg width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="13" fill="none" stroke="' + op + '" stroke-width="2.8"/><text x="41" y="15" font-size="15" font-weight="800" fill="' + op + '" stroke="' + css('--paper') + '" stroke-width="3" paint-order="stroke" font-family="Archivo, sans-serif">' + (i + 1) + '</text></svg>';
+      L.marker([g.lat[v], g.lon[v]], { icon: courseIcon(svg, 56), interactive: false }).addTo(routeLayer);
+    });
+    // start triangle pointing along the first stretch, inside the finish double circle
+    const home = (walk ? walk.startNode : plan.startNode);
+    const geo = E.routeGeometry(g, r);
+    let k = 1; while (k < geo.P.length - 1 && geo.cum[k] < 40) k++;
+    const ang = Math.atan2(geo.P[k][0] - geo.P[0][0], geo.P[k][1] - geo.P[0][1]) * 180 / Math.PI;
+    const tri = '<svg width="46" height="46" viewBox="0 0 46 46"><circle cx="23" cy="23" r="20" fill="none" stroke="' + op + '" stroke-width="2.4"/><circle cx="23" cy="23" r="15" fill="none" stroke="' + op + '" stroke-width="2.4"/><path transform="rotate(' + ang.toFixed(0) + ' 23 23)" d="M23 13 L31.5 28 H14.5 Z" fill="none" stroke="' + op + '" stroke-width="2.4" stroke-linejoin="round"/></svg>';
+    if (!walk || r === walk.original) L.marker([g.lat[home], g.lon[home]], { icon: courseIcon(tri, 46), interactive: false }).addTo(routeLayer);
+    else L.marker([g.lat[home], g.lon[home]], { icon: courseIcon('<svg width="46" height="46" viewBox="0 0 46 46"><circle cx="23" cy="23" r="20" fill="none" stroke="' + op + '" stroke-width="2.4"/><circle cx="23" cy="23" r="15" fill="none" stroke="' + op + '" stroke-width="2.4"/></svg>', 46), interactive: false }).addTo(routeLayer);
+  }
+
+  // ---------------- walking ----------------
+  async function startWalk() {
+    if (!plan) return;
+    await Sound.unlock();
+    wake.acquire();
+    walk = {
+      route: plan.route, original: plan.route, mask: plan.mask, startNode: plan.startNode,
+      nav: new E.Navigator(graph, plan.route, { cueDist: S.cueDist }), t0: Date.now(),
+      track: { id: 'w' + Date.now(), t0: Date.now(), src: 'neuland', pts: [] },
+      newLen: 0, offTimer: 0, followPausedAt: 0, plannedMinutes: plan.minutes, plannedLen: plan.route.length,
+    };
+    tracks.push(walk.track);
+    $('plan').hidden = true; $('top').hidden = true;
+    $('band').hidden = false; $('walk').hidden = false;
+    renderRoute();
+    if (here) map.setView([here.lat, here.lon], 17);
+    startWatch();
+    if (here && Date.now() - here.t < 15000) onWalkFix(here);
+    updateBand(); updateWalkStats(); updateStatus();
+    if (!Sound.unlocked) toast('Sound did not start. Tap Settings and use Test right to enable it.', 6000);
+  }
+  function onWalkFix(f) {
+    const g = graph, w = walk;
+    const fix = { x: g.proj.x(f.lon), y: g.proj.y(f.lat), acc: f.acc, t: f.t };
+    const last = w.track.pts[w.track.pts.length - 1];
+    if (f.acc <= 35 && (!last || distM({ lat: last[0], lon: last[1] }, f) >= 8 || f.t - last[2] > 15000)) {
+      w.track.pts.push([+f.lat.toFixed(6), +f.lon.toFixed(6), f.t]);
+      if (w.track.pts.length % 20 === 0) scheduleSave();
+    }
+    const ev = w.nav.update(fix);
+    for (const e of ev) {
+      if (e.type === 'cue') Sound.play(e.dir);
+      else if (e.type === 'walked') w.newLen += markSegs(e.segs);
+      else if (e.type === 'offroute') onOffRoute();
+      else if (e.type === 'onroute') onBackOnRoute();
+      else if (e.type === 'arrive') { Sound.play('arrive'); setTimeout(() => endWalk(true), 1800); }
+    }
+    if (w.nav.off && f.acc <= 20) {
+      const q = E.nearestSeg(g, fix.x, fix.y, 12);
+      if (q) w.newLen += markSegs([q.s]);
+    }
+    if (doneLine) {
+      const { P, cum } = w.nav.geo, pts = [];
+      for (let i = 0; i < P.length && cum[i] <= w.nav.progress; i++) pts.push([g.proj.lat(P[i][1]), g.proj.lon(P[i][0])]);
+      doneLine.setLatLngs(pts);
+    }
+    if (Date.now() - w.followPausedAt > 20000) map.panTo([f.lat, f.lon], { animate: true, duration: 0.5 });
+    updateBand(); updateWalkStats(); updateStatus();
+  }
+  function onOffRoute() {
+    Sound.play('off');
+    clearTimeout(walk.offTimer);
+    walk.offTimer = setTimeout(() => { if (walk && walk.nav.off) reroute(); }, 7000);
+    updateBand();
+  }
+  function onBackOnRoute() { clearTimeout(walk.offTimer); updateBand(); }
+  function reroute() {
+    if (!walk || !here) return;
+    const g = graph;
+    const nr = E.rejoinRoute(g, walk.nav, g.proj.x(here.lon), g.proj.y(here.lat), S.quiet);
+    if (!nr) { toast('No way back to the route found from here. Use Back to start, or keep walking.', 6000); return; }
+    setActiveRoute(nr, 'New way back to your route');
+  }
+  function backToStart() {
+    if (!walk || !here) { toast('Waiting for a GPS position.'); return; }
+    const g = graph;
+    const v0 = E.snapNode(g, g.proj.x(here.lon), g.proj.y(here.lat));
+    const p = v0 >= 0 ? E.shortestPath(g, v0, walk.startNode, S.quiet) : null;
+    if (!p) { toast('No way back to the start found from here.'); return; }
+    setActiveRoute({ nodes: p.nodes, segs: p.segs }, 'Heading back to the start by the shortest way');
+  }
+  function setActiveRoute(r, msg) {
+    clearTimeout(walk.offTimer);
+    walk.route = r;
+    walk.mask = noveltyMask(r);
+    walk.nav = new E.Navigator(graph, r, { cueDist: S.cueDist });
+    renderRoute();
+    const hd = headingNow();
+    if (hd !== null && r.nodes.length > 1) {
+      const geo = walk.nav.geo;
+      let k = 1; while (k < geo.P.length - 1 && geo.cum[k] < 25) k++;
+      const rb = Math.atan2(geo.P[k][0] - geo.P[0][0], geo.P[k][1] - geo.P[0][1]) * 180 / Math.PI;
+      if (Math.abs(E.normDeg(rb - hd)) > 120) Sound.play('uturn');
+    }
+    if (here) onWalkFix(here);
+    toast(msg, 3500);
+  }
+  function movingMinutes(pts) {
+    let sec = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const dt = (pts[i][2] - pts[i - 1][2]) / 1000;
+      if (dt <= 0 || dt > 60) continue;
+      const v = distM({ lat: pts[i - 1][0], lon: pts[i - 1][1] }, { lat: pts[i][0], lon: pts[i][1] }) / dt;
+      if (v > 0.35 && v < 3) sec += dt;
+    }
+    return sec / 60;
+  }
+  function trackKm(pts) {
+    let d = 0;
+    for (let i = 1; i < pts.length; i++) d += distM({ lat: pts[i - 1][0], lon: pts[i - 1][1] }, { lat: pts[i][0], lon: pts[i][1] });
+    return d / 1000;
+  }
+  function endWalk(arrived) {
+    if (!walk) return;
+    const w = walk; walk = null;
+    clearTimeout(w.offTimer);
+    wake.release();
+    hidePocket();
+    if (w.track.pts.length < 3) tracks = tracks.filter((t) => t !== w.track);
+    const km = trackKm(w.track.pts);
+    if (arrived) {
+      const moving = movingMinutes(w.track.pts);
+      const hillFactor = w.plannedMinutes / Math.max(1, w.plannedLen / paceMps() / 60);
+      const predicted = (km * 1000 / paceMps() / 60) * hillFactor;
+      if (moving > 10 && predicted > 5) {
+        const ratio = Math.min(1.5, Math.max(0.67, predicted / moving));
+        S.pace = Math.round(Math.min(7.5, Math.max(3, S.pace * (0.7 + 0.3 * ratio))) * 10) / 10;
+        S.paceSource = 'learned';
+        saveSettings();
+      }
+    }
+    saveNow();
+    $('band').hidden = true; $('walk').hidden = true;
+    $('plan').hidden = false; $('top').hidden = false;
+    clearPlan();
+    renderHistory(); updateExplored();
+    toast((arrived ? 'Loop complete. ' : 'Walk saved. ') + 'You walked ' + km.toFixed(1) + ' km, ' + (w.newLen / 1000).toFixed(1) + ' km of it on new streets.', 7000);
+  }
+
+  // ---------------- walking display ----------------
+  const GLYPHS = {
+    right: '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 58V34a10 10 0 0 1 10-10h20"/><path d="M42 12l12 12-12 12"/></svg>',
+    left: '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M42 58V34a10 10 0 0 0-10-10H12"/><path d="M22 12L10 24l12 12"/></svg>',
+    uturn: '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M42 58V26a12 12 0 0 0-24 0v14"/><path d="M8 32l10 10 10-10"/></svg>',
+    straight: '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M32 58V10"/><path d="M20 22l12-12 12 12"/></svg>',
+    finish: '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5"><circle cx="32" cy="32" r="26"/><circle cx="32" cy="32" r="17"/></svg>',
+    off: '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"><circle cx="32" cy="32" r="25"/><path d="M32 18v17"/><path d="M32 45v1"/></svg>',
+  };
+  const fmtDist = (m) => (m >= 1000 ? { n: (m / 1000).toFixed(1), u: 'km' } : { n: String(m > 60 ? Math.round(m / 10) * 10 : Math.max(0, Math.round(m))), u: 'm' });
+  function updateBand() {
+    if (!walk) return;
+    const nav = walk.nav, band = $('band');
+    let glyph, d, what;
+    if (nav.off) {
+      band.classList.add('off');
+      glyph = GLYPHS.off; d = null; what = 'Finding a way back';
+    } else {
+      band.classList.remove('off');
+      const t = nav.upcoming;
+      if (!t) { glyph = GLYPHS.finish; d = nav.remaining; what = 'to the finish'; }
+      else {
+        const dist = t.along - nav.progress;
+        glyph = dist > 60 ? GLYPHS.straight : GLYPHS[t.dir];
+        d = dist;
+        const verb = t.dir === 'uturn' ? 'Turn around' : 'Turn ' + t.dir;
+        what = dist > 60 ? 'then ' + verb.toLowerCase() + (t.street ? ' onto ' + t.street : '') : verb + (t.street ? ' onto ' + t.street : '');
+      }
+    }
+    $('bandGlyph').innerHTML = glyph;
+    if (d === null) $('bandDist').textContent = 'Off route';
+    else { const f = fmtDist(d); $('bandDist').innerHTML = f.n + '<small>' + f.u + '</small>'; }
+    $('bandWhat').textContent = what;
+    $('pGlyph').innerHTML = glyph;
+    $('pDist').textContent = d === null ? '' : fmtDist(d).n + ' ' + fmtDist(d).u;
+  }
+  function updateWalkStats() {
+    if (!walk) return;
+    const nav = walk.nav, rem = nav.remaining;
+    $('wLeft').textContent = (rem / 1000).toFixed(1);
+    const hill = walk.plannedMinutes / Math.max(1, walk.plannedLen / paceMps() / 60);
+    $('wMin').textContent = Math.round((rem / paceMps() / 60) * hill);
+    $('wNew').innerHTML = (walk.newLen / 1000).toFixed(1) + '<small>km</small>';
+    $('progBar').style.width = Math.min(100, (nav.progress / Math.max(1, nav.total)) * 100).toFixed(1) + '%';
+  }
+  function updateStatus() {
+    const set = (dot, txt, ok, label) => { $(dot).className = ok === null ? '' : ok ? 'ok' : 'bad'; $(txt).textContent = label; };
+    if (geoDenied) set('gpsDot', 'gpsTxt', false, 'Location off');
+    else if (!here) set('gpsDot', 'gpsTxt', null, 'Waiting for GPS');
+    else set('gpsDot', 'gpsTxt', here.acc <= 25, 'GPS ±' + Math.round(here.acc) + ' m');
+    set('sndDot', 'sndTxt', Sound.unlocked, Sound.unlocked ? 'Sound on' : 'Sound off');
+    const wakeOK = !!wake.lock;
+    set('wakeDot', 'wakeTxt', wakeOK, wakeOK ? 'Screen stays on' : 'Set Auto-Lock to Never');
+  }
+
+  // ---------------- pocket mode ----------------
+  let holdTimer = 0, holdStart = 0, holdRaf = 0;
+  function showPocket() { $('pocket').hidden = false; updateBand(); }
+  function hidePocket() { $('pocket').hidden = true; cancelHold(); }
+  function cancelHold() { clearTimeout(holdTimer); cancelAnimationFrame(holdRaf); $('ringArc').setAttribute('stroke-dashoffset', '176'); }
+  const pocket = $('pocket');
+  pocket.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    holdStart = performance.now();
+    const step = () => {
+      const f = Math.min(1, (performance.now() - holdStart) / 1100);
+      $('ringArc').setAttribute('stroke-dashoffset', String(176 * (1 - f)));
+      if (f < 1) holdRaf = requestAnimationFrame(step);
+    };
+    holdRaf = requestAnimationFrame(step);
+    holdTimer = setTimeout(hidePocket, 1100);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach((n) => pocket.addEventListener(n, cancelHold));
+
+  // ---------------- controls ----------------
+  const RANGES = { time: { min: 10, max: 180, step: 5 }, dist: { min: 1, max: 20, step: 0.5 } };
+  function syncAmount() {
+    const time = S.mode === 'time', r = RANGES[time ? 'time' : 'dist'], el = $('amount');
+    el.min = r.min; el.max = r.max; el.step = r.step; el.value = time ? S.minutes : S.km;
+    $('amountNum').textContent = time ? S.minutes : (S.km % 1 ? S.km.toFixed(1) : S.km);
+    $('amountUnit').textContent = time ? 'min' : 'km';
+    $('modeTime').setAttribute('aria-pressed', String(time));
+    $('modeDist').setAttribute('aria-pressed', String(!time));
+    $('hint').innerHTML = customStart
+      ? 'Starts and ends at the pin. <button class="linkbtn" id="useMe">Start from my location</button>'
+      : 'Starts and ends where you are. Long-press the map to start somewhere else.';
+    const useMe = $('useMe');
+    if (useMe) useMe.onclick = () => { customStart = null; if (pinMarker) { map.removeLayer(pinMarker); pinMarker = null; } clearPlan(); syncAmount(); updateExplored(); };
+  }
+  function changeAmount(v) {
+    const time = S.mode === 'time', r = RANGES[time ? 'time' : 'dist'];
+    v = Math.min(r.max, Math.max(r.min, Math.round(v / r.step) * r.step));
+    if (time) S.minutes = v; else S.km = v;
+    saveSettings(); syncAmount();
+    if (plan) clearPlan();
+  }
+  $('amount').addEventListener('input', (e) => changeAmount(+e.target.value));
+  $('minusBtn').onclick = () => changeAmount((S.mode === 'time' ? S.minutes : S.km) - RANGES[S.mode === 'time' ? 'time' : 'dist'].step);
+  $('plusBtn').onclick = () => changeAmount((S.mode === 'time' ? S.minutes : S.km) + RANGES[S.mode === 'time' ? 'time' : 'dist'].step);
+  $('modeTime').onclick = () => { S.mode = 'time'; saveSettings(); syncAmount(); if (plan) clearPlan(); };
+  $('modeDist').onclick = () => { S.mode = 'dist'; saveSettings(); syncAmount(); if (plan) clearPlan(); };
+  $('findBtn').onclick = () => findRoute(false);
+  $('againBtn').onclick = () => findRoute(true);
+  $('startBtn').onclick = () => startWalk();
+  $('pocketBtn').onclick = showPocket;
+  $('homeBtn').onclick = backToStart;
+  $('endBtn').onclick = () => endWalk(false);
+  $('locateBtn').onclick = async () => {
+    startWatch();
+    const f = here || (await nextFix(10000));
+    if (f) map.setView([f.lat, f.lon], Math.max(map.getZoom(), 15)); else if (!geoDenied) toast('Waiting for a GPS position.');
+  };
+  map.on('dragstart', () => { if (walk) walk.followPausedAt = Date.now(); });
+  map.on('contextmenu', (e) => {
+    if (walk) return;
+    customStart = { lat: e.latlng.lat, lon: e.latlng.lng };
+    const op = css('--overprint');
+    const icon = courseIcon('<svg width="30" height="30" viewBox="0 0 30 30"><path d="M15 4 L26 23 H4 Z" fill="' + op + '" fill-opacity=".18" stroke="' + op + '" stroke-width="2.6" stroke-linejoin="round"/></svg>', 30);
+    if (pinMarker) pinMarker.setLatLng(e.latlng); else pinMarker = L.marker(e.latlng, { icon, interactive: false }).addTo(map);
+    clearPlan(); syncAmount(); updateExplored();
+  });
+
+  // settings panel
+  function openSettings() {
+    $('cueDist').value = String(S.cueDist);
+    $('stereo').checked = !!S.stereo;
+    $('audioMode').value = S.audioMode;
+    $('volume').value = S.volume;
+    $('novelty').value = S.novelty;
+    $('quiet').checked = !!S.quiet;
+    const ps = $('pace');
+    if (!ps.options.length) for (let v = 3.4; v <= 7.01; v += 0.2) { const o = document.createElement('option'); o.value = v.toFixed(1); o.textContent = v.toFixed(1) + ' km/h'; ps.appendChild(o); }
+    const closest = [...ps.options].reduce((a, o) => (Math.abs(+o.value - S.pace) < Math.abs(+a.value - S.pace) ? o : a));
+    if (Math.abs(+closest.value - S.pace) > 0.01) { const o = document.createElement('option'); o.value = S.pace.toFixed(1); o.textContent = S.pace.toFixed(1) + ' km/h'; ps.appendChild(o); }
+    ps.value = S.pace.toFixed(1);
+    $('paceNote').textContent = S.paceSource === 'learned' ? 'Learned from your finished walks' : 'Used for time-based walks; adjusts as you walk';
+    updateHistStats();
+    $('settings').hidden = false;
+  }
+  function updateHistStats() {
+    let km = 0;
+    if (graph && walkedArr) for (let s = 0; s < graph.S; s++) if (walkedArr[s]) km += graph.segLen[s];
+    const walks = tracks.length;
+    $('histStats').textContent = walks + (walks === 1 ? ' walk' : ' walks') + ' recorded' + (graph ? ', ' + (km / 1000).toFixed(1) + ' km of streets in this area marked as walked.' : '.');
+  }
+  $('settingsBtn').onclick = openSettings;
+  $('closeSettings').onclick = () => { $('settings').hidden = true; };
+  $('settings').addEventListener('click', (e) => { if (e.target === $('settings')) $('settings').hidden = true; });
+  $('cueDist').onchange = (e) => { S.cueDist = +e.target.value; saveSettings(); };
+  $('stereo').onchange = (e) => { S.stereo = e.target.checked; saveSettings(); };
+  $('audioMode').onchange = (e) => { S.audioMode = e.target.value; saveSettings(); Sound.session(); };
+  $('volume').oninput = (e) => { S.volume = +e.target.value; saveSettings(); };
+  $('novelty').onchange = (e) => { S.novelty = e.target.value; saveSettings(); };
+  $('quiet').onchange = (e) => { S.quiet = e.target.checked; saveSettings(); };
+  $('pace').onchange = (e) => { S.pace = +e.target.value; S.paceSource = 'manual'; saveSettings(); $('paceNote').textContent = 'Set by you'; };
+  const testSound = async (kind) => {
+    await Sound.unlock();
+    const ok = await Sound.play(kind);
+    if (!ok) toast('No sound. Turn off Silent mode, then try again. If it still fails, set Over your podcast to Mix on top.', 7000);
+  };
+  $('testRight').onclick = () => testSound('right');
+  $('testLeft').onclick = () => testSound('left');
+  $('testOff').onclick = () => testSound('off');
+
+  // files
+  async function offerFile(name, type, text) {
+    const file = new File([text], name, { type });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+  $('exportBtn').onclick = () => offerFile('neuland-backup-' + new Date().toISOString().slice(0, 10) + '.json', 'application/json',
+    JSON.stringify({ app: 'neuland', v: 1, walked: Array.from(walkedKeys), tracks, settings: S }));
+  $('backupIn').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      if (data.app !== 'neuland') throw new Error('not ours');
+      (data.walked || []).forEach((k) => walkedKeys.add(k));
+      const ids = new Set(tracks.map((t) => t.id));
+      (data.tracks || []).forEach((t) => { if (!ids.has(t.id)) tracks.push(t); });
+      saveNow(); applyHistory(); updateHistStats();
+      toast('Backup restored.');
+    } catch (err) { toast('That file is not a Neuland backup.'); }
+  };
+  $('gpxIn').onchange = async (e) => {
+    const files = [...e.target.files]; e.target.value = '';
+    let n = 0, km = 0;
+    for (const f of files) {
+      try {
+        const doc = new DOMParser().parseFromString(await f.text(), 'application/xml');
+        const pts = [];
+        doc.querySelectorAll('trkpt, rtept').forEach((p) => {
+          const lat = +p.getAttribute('lat'), lon = +p.getAttribute('lon');
+          const tm = p.querySelector('time');
+          if (isFinite(lat) && isFinite(lon)) pts.push([lat, lon, tm ? Date.parse(tm.textContent) || 0 : 0]);
+        });
+        if (pts.length < 2) continue;
+        tracks.push({ id: 'g' + Date.now() + '_' + n, t0: pts[0][2] || Date.now(), src: 'gpx', name: f.name, pts });
+        n++; km += trackKm(pts);
+      } catch (err) { /* skip unreadable file */ }
+    }
+    if (!n) { toast('No walks found in that file.'); return; }
+    saveNow();
+    if (graph) applyHistory();
+    updateHistStats();
+    toast('Imported ' + n + (n === 1 ? ' walk' : ' walks') + ', ' + km.toFixed(1) + ' km.' + (graph ? '' : ' They count once streets load.'));
+  };
+  $('gpxOut').onclick = () => {
+    const r = walk ? walk.route : plan && plan.route;
+    if (!r) { toast('Find a route first.'); return; }
+    const pts = E.routeLatLngs(graph, r).map((p) => '<trkpt lat="' + p[0].toFixed(6) + '" lon="' + p[1].toFixed(6) + '"/>').join('');
+    offerFile('neuland-route.gpx', 'application/gpx+xml', '<?xml version="1.0" encoding="UTF-8"?><gpx version="1.1" creator="Neuland" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>Neuland loop</name><trkseg>' + pts + '</trkseg></trk></gpx>');
+  };
+  $('resetBtn').onclick = () => {
+    if (!window.confirm('Clear all walking history on this phone? Save a backup first if you might want it back.')) return;
+    walkedKeys = new Set(); tracks = [];
+    saveNow(); applyHistory(); updateHistStats();
+    toast('History cleared.');
+  };
+
+  // background / foreground
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (wake.want && !wake.lock) wake.acquire();
+      if (walk && walk.hiddenAt && Date.now() - walk.hiddenAt > 8000) toast('Neuland pauses when it is not on screen. Use Pocket mode and control your podcast from Control Center.', 7000);
+      if (walk) walk.hiddenAt = 0;
+    } else {
+      if (walk) walk.hiddenAt = Date.now();
+      saveNow();
+    }
+  });
+  window.addEventListener('pagehide', saveNow);
+
+  // ---------------- boot ----------------
+  (async () => {
+    syncAmount();
+    const [wk, tr] = await Promise.all([DB.get('walked'), DB.get('tracks')]);
+    if (Array.isArray(wk)) wk.forEach((k) => walkedKeys.add(k));
+    if (Array.isArray(tr)) tracks = tr;
+    startWatch();
+    const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+    if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !standalone) {
+      setTimeout(() => toast('Add Neuland to your Home Screen (Share, then Add to Home Screen) so your history is kept.', 8000), 1500);
+    }
+  })();
+
+  window.__neuland = {
+    S, Sound, get graph() { return graph; }, get plan() { return plan; }, get walk() { return walk; },
+    get walkedKeys() { return walkedKeys; }, get tracks() { return tracks; }, findRoute, startWalk, endWalk, reroute,
+  };
+})();
+
+</script>
+</body>
+</html>
